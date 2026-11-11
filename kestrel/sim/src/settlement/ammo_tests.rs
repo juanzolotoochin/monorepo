@@ -3,7 +3,7 @@
 //! as much as fits in the gun's store (20), the rest staying in the
 //! bundle; a walking crawler takes none; nothing comes back out; the
 //! balances hold through deliveries and shots; saves, hashes and
-//! prediction hold with a delivery under way. And the gun, 4.3 m up,
+//! prediction hold with a delivery under way. And the gun, 4.8 m up,
 //! shoots threats on any floor in sight below it, not only its own.
 
 use fx::{Fx, FxVec2};
@@ -377,7 +377,7 @@ fn park(sim: &mut Simulation, x: f64, z: f64) {
     s.vehicles[0] = parked;
 }
 
-/// The gun, 4.3 m up, shoots ghouls below it on other floors: from the
+/// The gun, 4.8 m up, shoots ghouls below it on other floors: from the
 /// ground into the trench (2 m down, beyond the floor reach a ballista
 /// keeps to) and from the plateau (1.5 m up) onto the ground below its
 /// north face. A sprite mans it; each ghoul is hit.

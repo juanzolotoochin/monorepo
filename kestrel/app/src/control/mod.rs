@@ -302,6 +302,15 @@ fn guest_player(guest: u32) -> Result<sim::PlayerId, String> {
     }
     Ok(sim::PlayerId(guest))
 }
+/// A scripted stick (`drive`, `guest_drive`): finite, at most 1 long, in
+/// the sim's fixed point.
+fn stick(direction: [f32; 2]) -> Result<fx::FxVec2, String> {
+    if direction.iter().any(|v| !v.is_finite()) || direction[0].hypot(direction[1]) > 1.001 {
+        return Err("Drive needs a finite direction of length at most 1".into());
+    }
+    Ok(fx::FxVec2::new(fx::Fx::quantize(direction[0]), fx::Fx::quantize(direction[1])))
+}
+
 fn player(world: &World) -> Option<u16> {
     world.get_resource::<SessionService>()?.player()
 }
@@ -610,12 +619,17 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Applied)
         }
         Command::Drive { direction, run } => {
-            if direction.iter().any(|v| !v.is_finite()) || direction[0].hypot(direction[1]) > 1.001 {
-                return Err("Drive needs a finite direction of length at most 1".into());
-            }
+            let direction = stick(*direction)?;
             let agent = player(world).ok_or("No player")?;
-            let direction = fx::FxVec2::new(fx::Fx::quantize(direction[0]), fx::Fx::quantize(direction[1]));
             send(world, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::Walk { direction, run: *run } });
+            Ok(Pending::Applied)
+        }
+        Command::GuestDrive { guest, direction, run } => {
+            let player = guest_player(*guest)?;
+            let direction = stick(*direction)?;
+            let mut service = world.resource_mut::<SessionService>();
+            let agent = service.settlement().and_then(|s| s.avatar_of(player)).ok_or("That guest hasn't joined")?;
+            service.command_as(player, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::Walk { direction, run: *run } })?;
             Ok(Pending::Applied)
         }
         Command::Dig => {

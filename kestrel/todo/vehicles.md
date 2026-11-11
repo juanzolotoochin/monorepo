@@ -4,73 +4,9 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 (decisions C1–C12). Its tasks CR.1–CR.6 are done (see Done); what's left
 of it is in the open entries below.
 The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
-(decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
-branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
-
-## TU.6 Soak, demos and docs
-
-- **Status:** open
-- **Why:** the prototype is reviewed by video (T10).
-- **What to do:** a soak in the lab with waves, a pilot, a gunner and
-  sprites, `validate` every tick; two demo videos (a pilot and a guest
-  gunner clearing a wave; a sprite gunner); the full suite; a
-  `docs/test-time.md` row; `docs/vehicles.md`, `CRAWLER_TURRET.md`'s
-  status, a "Play the crawler's turret" section in
-  `todo/playtest-review.md`.
-- **Where:** sim tests, `app/demos/`, docs.
-- **Found in:** crawler turret design.
-- **Tests:** the soak; the full suite.
-- **Notes from TU.1:** the soak (`crawler_lab_tests::soak`) now boards a
-  pilot, a gunner and two riders and checks the gunner's place every
-  tick; it still widens only `waves[0]` (the old south-east wave, 1 every
-  4 s), the other five waves run as written. The demo
-  (`demos/crawler_lab.json`) still boards three guests; since TU.1 the
-  first guest takes the gun, the others ride. The north-east waves set
-  off at 25 s and reach the crawler's start about a minute later, after
-  the demo has left it; its stomps are of the south-east wave as before
-  (not re-rendered in TU.1). The lab's waves end at 137 s (24 ghouls):
-  a longer soak or demo needs more, or widen a wave as the soak does.
-- **Notes from TU.2:** the soak can seat a sprite at the gun with
-  `Settlement::man_gun` and count `Event::GunShot`; the CR.5 soak check
-  "every kill a stomp" no longer holds once the gun shoots. The gun only
-  targets threats on the floor under its mount (`pick_target` in a
-  volume): see "A crawler's gun shoots only its own floor".
-- **Notes from TU.3:** deliveries are `ammo_tests` (5). A soak with a
-  gunner can restock the gun: hand an elder stone from `lab_stone` and
-  `Interact { target: Gun(0) }` beside the box while the pilot holds no
-  stick (`validate` checks the store's reservations now). An elder's
-  bundle holds 5 in the lab (`capacity: 5`), so a full restock is four
-  trips from the pile, about 5.5 m from the parked crawler. A delivery
-  paused by a walking crawler keeps the elder's job (Busy) until it
-  stops beside them again or they cancel. The gun now also shoots
-  ghouls below it from the plateau or into the trench
-  (`combat::below_gun`), so the soak's waves may die to the gun on
-  other floors too.
-- **Notes from TU.4:** a demo script sends a sprite to the gun with
-  `{ "op": "settlement_sprite_job", "sprite": "sprite_ash", "job": "crew" }`;
-  from the stone pile it takes a few seconds to walk round to the parked
-  crawler (`crew_tests` allow up to 30 s; the app test reaches it inside
-  1400 frames at 30 fps) and only climbs up while the crawler stands
-  still, so the sprite-gunner demo must board it before the pilot walks
-  off, or stop and wait. With a sprite at the gun, the second elder
-  aboard still takes the gun (the sprite rides in place 0), so a demo
-  with a sprite gunner and guests should board guests first or seat
-  them as riders by order. A soak can set `SpriteJob::Crew` on both lab
-  sprites and toggle it, and should expect the one not at the gun to
-  wait beside the crawler; `validate` checks riding sprites.
-- **Notes from TU.5:** `//kestrel/app:crawler_turret_demo`
-  (`demos/crawler_turret.json`) has a guest pilot (standing still) and
-  the local elder at the gun firing with `settlement_fire` and
-  `settlement_fireball` (offsets from the mount; space shots 30 frames or
-  more, a refused op fails the demo), then `sprite_ash` crewing. Demo
-  scripts have no guest ops to aim, fire or drive (see "Guest gunners and
-  pilots in demo scripts"), so "a pilot and a guest gunner" needs one,
-  or the local player at the gun with a guest pilot that can drive. The
-  elder's first wave of shots at fixed offsets kills nothing (the
-  ghouls are still out of reach at 4 to 18 s): aim later or follow a threat's
-  position from the trace. The gun is small at the lab's camera
-  distance; the frames read it at 1440 x 960. `lab_line` and `lab_help`
-  are the lab's HUD; the gunner's help line says LMB/R.
+(decisions T1–T10); its tasks TU.1–TU.6 are done (see Done), on branch
+`kestrel-crawler-turret` stacked on `kestrel-crawler`; what's left of it
+is in the open entries below.
 
 ## Collide rovers with bodies
 
@@ -216,6 +152,11 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   crawler) feet to `settlement::snapshot`.
 - **Where:** `kestrel/app/src/settlement.rs` (`snapshot`).
 - **Found in:** CR.6 of the crawler.
+- **Notes from TU.6:** aiming the gunner demo's shots needed the gun's
+  mount, which the trace doesn't have either: the planner took the
+  crawler's middle from the pilot's position and its heading from the
+  gunner's place behind it (2.4 m back). The gun's store and turret
+  would help too.
 
 ## A crawler's gun without its ammo
 
@@ -288,9 +229,159 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/app/src/input/town.rs`, `input/gameplay.rs`.
 - **Found in:** TU.4 of the crawler turret.
 
-## Guest gunners and pilots in demo scripts
+## A sprite gunner doesn't lead a crossing ghoul
 
 - **Status:** open
+- **Why:** a sprite at a crawler's gun (and a staffed ballista) shoots at
+  its target's position as it is (`gun::aim_guns`, `GunFire { to:
+  t.position }`), and a bolt only hits what it crosses on its way there.
+  A ghoul walking at the gun is hit; one walking across the line of fire
+  has stepped out of it by the time the bolt arrives. In TU.6's first
+  sprite-gunner demo the sprite spent 14 stones on the north-east wave
+  walking past 4 to 7 m off and hit nothing.
+- **What to do:** lead the target by its velocity over the bolt's flight
+  (as the demo's planner does), for the gun at least; the ballista's
+  change moves the town's golden behaviour lines.
+- **Where:** `kestrel/sim/src/settlement/gun.rs` (`aim_guns`),
+  `buildings.rs` (`aim_buildings`), `combat.rs` (`pick_target`).
+- **Found in:** TU.6 of the crawler turret.
+
+## Many kills by fire in the crawler soak
+
+- **Status:** open
+- **Why:** the TU.6 soak's half hour counts 865 kills by fire from 20
+  fireballs (4 s of fire each), more than the stomps; the lab's ghouls
+  seem to bunch where the two corners' waves cross and burn together.
+  Not checked whether that is the fire's rules (burning ground, linger)
+  or the waves' bunching.
+- **What to do:** count ghouls per fire in a soak and decide whether one
+  fireball should be able to clear a crowd.
+- **Where:** `kestrel/sim/src/settlement/fire.rs`,
+  `crawler_lab_tests.rs` (the soak).
+- **Found in:** TU.6 of the crawler turret.
+
+## Done
+
+## TU.6 Soak, demos and docs
+
+- **Status:** done (branch `kestrel-crawler-turret`, PR to come)
+- **Why:** the prototype is reviewed by video (T10).
+- **What to do:** a soak in the lab with waves, a pilot, a gunner and
+  sprites, `validate` every tick; two demo videos (a pilot and a guest
+  gunner clearing a wave; a sprite gunner); the full suite; a
+  `docs/test-time.md` row; `docs/vehicles.md`, `CRAWLER_TURRET.md`'s
+  status, a "Play the crawler's turret" section in
+  `todo/playtest-review.md`.
+- **Where:** sim tests, `app/demos/`, docs.
+- **Found in:** crawler turret design.
+- **Tests:** the soak; the full suite.
+- **Notes from TU.1:** the soak (`crawler_lab_tests::soak`) now boards a
+  pilot, a gunner and two riders and checks the gunner's place every
+  tick; it still widens only `waves[0]` (the old south-east wave, 1 every
+  4 s), the other five waves run as written. The demo
+  (`demos/crawler_lab.json`) still boards three guests; since TU.1 the
+  first guest takes the gun, the others ride. The north-east waves set
+  off at 25 s and reach the crawler's start about a minute later, after
+  the demo has left it; its stomps are of the south-east wave as before
+  (not re-rendered in TU.1). The lab's waves end at 137 s (24 ghouls):
+  a longer soak or demo needs more, or widen a wave as the soak does.
+- **Notes from TU.2:** the soak can seat a sprite at the gun with
+  `Settlement::man_gun` and count `Event::GunShot`; the CR.5 soak check
+  "every kill a stomp" no longer holds once the gun shoots. The gun only
+  targets threats on the floor under its mount (`pick_target` in a
+  volume): see "A crawler's gun shoots only its own floor".
+- **Notes from TU.3:** deliveries are `ammo_tests` (5). A soak with a
+  gunner can restock the gun: hand an elder stone from `lab_stone` and
+  `Interact { target: Gun(0) }` beside the box while the pilot holds no
+  stick (`validate` checks the store's reservations now). An elder's
+  bundle holds 5 in the lab (`capacity: 5`), so a full restock is four
+  trips from the pile, about 5.5 m from the parked crawler. A delivery
+  paused by a walking crawler keeps the elder's job (Busy) until it
+  stops beside them again or they cancel. The gun now also shoots
+  ghouls below it from the plateau or into the trench
+  (`combat::below_gun`), so the soak's waves may die to the gun on
+  other floors too.
+- **Notes from TU.4:** a demo script sends a sprite to the gun with
+  `{ "op": "settlement_sprite_job", "sprite": "sprite_ash", "job": "crew" }`;
+  from the stone pile it takes a few seconds to walk round to the parked
+  crawler (`crew_tests` allow up to 30 s; the app test reaches it inside
+  1400 frames at 30 fps) and only climbs up while the crawler stands
+  still, so the sprite-gunner demo must board it before the pilot walks
+  off, or stop and wait. With a sprite at the gun, the second elder
+  aboard still takes the gun (the sprite rides in place 0), so a demo
+  with a sprite gunner and guests should board guests first or seat
+  them as riders by order. A soak can set `SpriteJob::Crew` on both lab
+  sprites and toggle it, and should expect the one not at the gun to
+  wait beside the crawler; `validate` checks riding sprites.
+- **Notes from TU.5:** `//kestrel/app:crawler_turret_demo`
+  (`demos/crawler_turret.json`) has a guest pilot (standing still) and
+  the local elder at the gun firing with `settlement_fire` and
+  `settlement_fireball` (offsets from the mount; space shots 30 frames or
+  more, a refused op fails the demo), then `sprite_ash` crewing. Demo
+  scripts have no guest ops to aim, fire or drive (see "Guest gunners and
+  pilots in demo scripts"), so "a pilot and a guest gunner" needs one,
+  or the local player at the gun with a guest pilot that can drive. The
+  elder's first wave of shots at fixed offsets kills nothing (the
+  ghouls are still out of reach at 4 to 18 s): aim later or follow a threat's
+  position from the trace. The gun is small at the lab's camera
+  distance; the frames read it at 1440 x 960. `lab_line` and `lab_help`
+  are the lab's HUD; the gunner's help line says LMB/R.
+- **Done:** visual fixes: the gun's mount is its bow now (`crawler.gun.height`
+  1.3 to 1.8 m, about 4.8 m over the feet; see "A crawler's bolts leave
+  under its drawn gun", Done), and the drawn gun (`actors/crawler.ron`)
+  grew to about 1.5 m across the bow and 1.9 m along the stock (within
+  1.1 m of the mount), dark iron and timber with a pale canvas mantlet
+  and brass trim, standing on an iron turntable on the roof; the stack and
+  dome moved to the deck in front of the cab to clear it. Soak
+  (`crawler_lab_tests::four_minutes_driving_and_shooting_among_ghouls_validates`,
+  1.2 s of test time, and `half_an_hour_..._validates`, `#[ignore]`d, run
+  once, 37 s): the pilot and a rider aboard, `sprite_ash` on the crew job
+  climbs to the parked gun, then an elder takes the gun and bumps it to the
+  free rider's place; the first wave from each corner sends a ghoul every
+  2 s; the pilot drives at random as in CR.6, ghouls and the grounded
+  elder are put under feet every 3 s; the gunner shoots the nearest
+  threat in range of the mount every 0.7 s or so and throws the fireball
+  now and then; every 15 to 25 s the pilot stops, the gunner climbs down
+  (the riding sprite takes the gun at once and shoots), is handed up to 5
+  stone from the lab's pile (topped up when low, counted as generated),
+  loads the gun by hand beside the box (`Interact { target: Gun(0) }`)
+  and boards again, bumping the sprite. Every tick: `validate`,
+  `validate_footholds`, the pilot and rider aboard, everyone aboard in
+  their place, the sprite aboard (at the gun or riding), every kill a
+  stomp, a gun bolt (`Impact::Arrow` from a projectile, no agent) or fire
+  (`combat.kills` equal to their sum). Four minutes: 31 bolts (18 the
+  elder's, 13 the sprite's), 31 stone spent, 12 loaded by hand in 6
+  restocks, 2 fireballs, kills 56 by stomp, 8 by bolt, 110 by fire, 10
+  stops, 9 bumps. Half an hour: 270 bolts (141 elder, 129 sprite), 270
+  stone spent, 254 loaded in 63 restocks, 20 fireballs, kills 719 by
+  stomp, 60 by bolt, 865 by fire, 74 stops and 74 bumps, 3133 lifts.
+  Demo scripts gained `guest_drive` (see "Guest gunners and pilots in demo
+  scripts", Done). Demos (T10): `//kestrel/app:crawler_gunner_demo`
+  (`demos/crawler_gunner.json`, 2360 frames): a guest pilots the crawler
+  south-east to the first wave and the elder at the gun shoots its three
+  ghouls (two bolts each, the fireball on the second), then the guest
+  walks it north to the north-east wave's line and the elder clears that
+  one too: 9 bolts, 2 fireballs, 6 kills; the elder's offsets were aimed
+  from the frame trace (the mount from the pilot's and gunner's places,
+  each ghoul led by its walk over the bolt's flight, iterated until the
+  script stopped changing). `//kestrel/app:crawler_sprite_gunner_demo`
+  (`demos/crawler_sprite_gunner.json`, 2300 frames): the elder pilots,
+  `sprite_ash` crews the parked gun (gunning from frame 175), the elder
+  walks it to the first wave, where the sprite kills all three, and on to
+  the north-east wave's line, where it kills three more: 12 bolts, 6
+  kills. Videos and frames reviewed (`tu6_gunner_small.mp4`,
+  `tu6_sprite_small.mp4`, `tu6_*.png`). The CR.6 demo (`crawler_lab.json`)
+  and the TU.5 demo still pass headless. App test
+  `vehicles::tests::a_scripted_guest_pilots_while_the_elder_mans_the_gun`;
+  `crawler::tests::the_gun_swivels_clear_on_the_cab_roof` now checks the
+  gun's foot on the roof and its bow at the mount. Docs:
+  `docs/vehicles.md`, `docs/character-definition.md`,
+  `CRAWLER_TURRET.md` (done, "What changed versus the design"),
+  `todo/playtest-review.md` ("Play the crawler's turret").
+
+## Guest gunners and pilots in demo scripts
+
+- **Status:** done (with TU.6, branch `kestrel-crawler-turret`, PR to come)
 - **Why:** demo scripts drive guests with `guest_join`, `guest_walk` and
   `guest_board` only; a guest at the crawler's gun can't aim or fire, and
   a guest in the cab can't drive. TU.6's demo of "a pilot and a guest
@@ -301,10 +392,18 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   `settlement_fire`), through `SessionService::command_as`.
 - **Where:** `kestrel/app/src/control/mod.rs`, `control/protocol.rs`.
 - **Found in:** TU.5 of the crawler turret.
+- **Done:** `guest_drive { guest, direction, run }` in the control
+  protocol (`control::protocol::Command::GuestDrive`): a `MoveAvatar` walk
+  for the guest through `SessionService::command_as`, checked as `drive`
+  is (`control::stick`), so a guest in the cab steers while the local
+  elder mans the gun and fires with `settlement_fire` and
+  `settlement_fireball`. No guest aim or fire ops: the gunner on camera is
+  the local elder. Used by `demos/crawler_gunner.json`; test
+  `vehicles::tests::a_scripted_guest_pilots_while_the_elder_mans_the_gun`.
 
 ## A crawler's bolts leave under its drawn gun
 
-- **Status:** open
+- **Status:** done (with TU.6, branch `kestrel-crawler-turret`, PR to come)
 - **Why:** the gun's mount is 1.3 m over the deck (`crawler.gun.height`),
   the cab roof's top, and bolts and the fireball leave from there; the
   drawn ballista (TU.5) stands on the roof with its stock about 0.55 m
@@ -315,8 +414,12 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/content/data/character/crawler.ron`,
   `app/actors/crawler.ron`.
 - **Found in:** TU.5 of the crawler turret.
-
-## Done
+- **Done:** `gun.height` is 1.8 m (`crawler.ron`), the drawn gun's bow,
+  half a meter over the roof; the rig's `gun` pieces stand on the roof
+  below their origin (the turntable's foot at -0.48 m) with the bow at
+  the origin. `the_gun_swivels_clear_on_the_cab_roof` checks both. The
+  sim golden doesn't move (no golden scene has a crawler); `turret_tests`,
+  `ammo_tests`, `crew_tests` and the content test (`gun.height` 1.8) pass.
 
 ## TU.5 The gun in the view
 

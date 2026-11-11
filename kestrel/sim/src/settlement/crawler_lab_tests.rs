@@ -585,52 +585,232 @@ fn a_minute_driving_round_the_lab_validates() {
     assert!(lifts > 40, "it walked: {lifts} lifts");
 }
 
-/// The soak (CR.6): a pilot, a gunner and two riders aboard (TU.1 of the
-/// turret), a fifth elder on the ground, ghouls coming every few seconds. The pilot walks, trots, turns
-/// in place, backs and steers at random for `minutes`; every so often a
-/// ghoul is put where a foot is about to land, or the elder on the ground
-/// steps there. Every tick the settlement validates, its feet in reach and
-/// on floors, the gunner and riders stay in their places, and every kill
-/// is a stomp.
-fn soak(minutes: f64, seed: u64) {
+/// What the soak saw, for its report and checks.
+#[derive(Debug, Default)]
+struct SoakTally {
+    lifts: usize,
+    trot_ticks: u64,
+    backing: u64,
+    puts: u64,
+    shoved: u64,
+    stomp_kills: u64,
+    bolt_kills: u64,
+    fire_kills: u64,
+    elder_bolts: u64,
+    sprite_bolts: u64,
+    fireballs: u64,
+    stone_loaded: u64,
+    restocks: u64,
+    stops: u64,
+    bumps: u64,
+    regrounded: u64,
+}
+
+/// Where the soak's stop has got to.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Stop {
+    Driving { at: u64 },
+    Stopping { since: u64 },
+    Loading { since: u64 },
+    Boarding { since: u64 },
+}
+
+/// The soak (CR.6, with the gun since TU.6 of the turret): the pilot
+/// (`agents[0]`) and a rider (`agents[2]`) aboard, `sprite_ash` on the crew
+/// job at the gun, then an elder gunner (`agents[1]`) taking it from the
+/// sprite, which rides in the free place; a fifth elder (`agents[4]`) on
+/// the ground and ghouls coming from two corners every 2 s. The pilot
+/// walks, trots, turns in place, backs and steers at random for `minutes`;
+/// every 3 s a ghoul is put where a foot is about to land, or the elder on
+/// the ground steps there. The gunner shoots the nearest threat in range of the mount
+/// and throws the fireball at it when it can. Every 15 to 25 s the pilot
+/// stops: the gunner climbs down (the riding sprite takes the gun at once),
+/// is handed stone from the lab's pile and loads the gun by hand beside the
+/// box, then boards again and bumps the sprite back to its place. Every
+/// tick the settlement validates, its feet in reach and on floors, everyone
+/// aboard stays in their place, and every kill is a stomp, a bolt or fire.
+fn soak(minutes: f64, seed: u64) -> SoakTally {
+    use super::interact::InteractTarget;
+    use super::sprites::SpriteJob;
+    use super::{Event, Impact};
+
     let (mut sim, agents) = crawler_lab_with_guests();
-    {
-        let wave = &mut sim.world_mut().settlement_mut().waves[0];
-        wave.count = 10_000;
-        wave.every = seconds(4.0);
+    // No ghouls while the crew sprite walks over and climbs aboard.
+    let counts: Vec<u32> = sim.world().settlement().unwrap().waves.iter().map(|w| w.count).collect();
+    sim.world_mut().settlement_mut().waves.iter_mut().for_each(|w| w.count = w.spawned);
+    let checked = |sim: &Simulation, tick: u64| {
+        let s = sim.world().settlement().unwrap();
+        s.validate().unwrap_or_else(|e| panic!("tick {tick}: {e}"));
+        s.validate_footholds(sim.world().terrain()).unwrap_or_else(|e| panic!("tick {tick}: {e}"));
+    };
+    let (ash, stone) = {
+        let s = sim.world().settlement().unwrap();
+        (s.agents.iter().position(|a| a.id == "sprite_ash").unwrap(), s.item_index("stone").unwrap())
+    };
+    let seat = |sim: &Simulation, i: usize| sim.world().settlement().unwrap().seat(agents[i] as usize);
+    // The pilot, the gunner and a rider board; the gunner climbs down
+    // again, and the sprite climbs to the parked gun.
+    board(&mut sim, &agents, &[0, 1, 2]);
+    assert_eq!(seat(&sim, 2), Some(Seat::Rider { vehicle: 0, place: 0 }), "the rider in place 0");
+    board(&mut sim, &agents, &[1]);
+    sim.step(&[Command { player: owner(0), kind: CommandKind::SetSpriteJob { agent: ash as u16, job: SpriteJob::Crew } }]);
+    for tick in 0..seconds(30.0) {
+        if sim.world().settlement().unwrap().sprite_gunner_of(0) == Some(ash) {
+            break;
+        }
+        sim.step(&[]);
+        checked(&sim, tick);
     }
-    board(&mut sim, &agents, &[0, 1, 2, 3]);
+    {
+        let s = sim.world().settlement().unwrap();
+        let a = &s.agents[ash];
+        assert_eq!(s.sprite_gunner_of(0), Some(ash), "the crew sprite climbed to the gun: {:?} at {:?}, crawler at {:?}, walking {}", a.sprite(), a.body.position, s.vehicles[0].position, crawler::walking(&s.vehicles[0]));
+    }
+    // The elder takes the gun; the sprite rides in the free place.
+    board(&mut sim, &agents, &[1]);
+    assert_eq!(seat(&sim, 1), Some(Seat::Gunner { vehicle: 0 }), "the elder took the gun");
+    assert_eq!(sim.world().settlement().unwrap().agents[ash].sprite().unwrap().rider, Some((0, 1)), "the sprite rides");
+    // Now the ghouls: the first wave from each corner widened to one every
+    // 2 s, so the gun always has some in range.
+    {
+        let s = sim.world_mut().settlement_mut();
+        s.waves.iter_mut().zip(counts).for_each(|(w, count)| w.count = count);
+        let corners: Vec<usize> = (0..s.waves.len()).filter(|&i| i == 0 || s.waves[i].position != s.waves[0].position).take(2).collect();
+        assert_eq!(corners.len(), 2, "waves from two corners");
+        for i in corners {
+            s.waves[i].count = 10_000;
+            s.waves[i].every = seconds(2.0);
+        }
+    }
+
     let mut rng = seed;
     let mut next = |n: u64| {
         rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (rng >> 33) % n
     };
+    let mut t = SoakTally::default();
     let mut until = 0;
-    let (mut put, mut shoved, mut stomp_kills, mut lifts) = (0u64, 0u64, 0u64, 0usize);
-    let mut gaits = [0u64; 2];
-    let mut backing = 0u64;
     let mut next_put = 0;
+    let mut next_fireball = 0;
+    let mut stop = Stop::Driving { at: seconds(20.0) };
     let ticks = seconds(minutes * 60.0);
     for tick in 0..ticks {
-        let (heading, position) = {
-            let v = &sim.world().settlement().unwrap().vehicles[0];
-            (v.heading, v.position)
+        let (heading, position, walking, mount, def) = {
+            let s = sim.world().settlement().unwrap();
+            let v = &s.vehicles[0];
+            let def = s.characters[v.character as usize].clone();
+            let (c, g) = super::gun::gun_of(&def).unwrap();
+            (v.heading, v.position, crawler::walking(v), super::gun::mount(v, c, g), def)
         };
         let mut turn = Vec::new();
-        if tick >= until {
-            until = tick + seconds(1.0 + next(5) as f64);
-            // Toward the lab's middle now and then, so it doesn't sit in a corner.
-            let home = (sim.world().terrain().center - position).normalize_or_zero();
-            let (direction, run) = match next(7) {
-                0 => (heading_vector(heading), false),
-                1 => (heading_vector(heading), true),
-                2 => (heading_vector(heading + Fx::FRAC_PI_2), false),
-                3 => (heading_vector(heading - Fx::FRAC_PI_2), next(2) == 0),
-                4 => (heading_vector(heading + Fx::PI), false),
-                5 => (home, next(2) == 0),
-                _ => (FxVec2::new(Fx::from_ratio(next(201) as i64 - 100, 100), Fx::from_ratio(next(201) as i64 - 100, 100)).normalize_or_zero(), next(3) == 0),
-            };
-            turn.push(Command { player: owner(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Walk { direction, run } } });
+        match stop {
+            Stop::Driving { at } if tick >= at => {
+                turn.push(Command { player: owner(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Stop } });
+                stop = Stop::Stopping { since: tick };
+                t.stops += 1;
+            }
+            Stop::Driving { .. } if tick >= until => {
+                until = tick + seconds(1.0 + next(5) as f64);
+                // Toward the lab's middle now and then, so it doesn't sit in a corner.
+                let home = (sim.world().terrain().center - position).normalize_or_zero();
+                let (direction, run) = match next(7) {
+                    0 => (heading_vector(heading), false),
+                    1 => (heading_vector(heading), true),
+                    2 => (heading_vector(heading + Fx::FRAC_PI_2), false),
+                    3 => (heading_vector(heading - Fx::FRAC_PI_2), next(2) == 0),
+                    4 => (heading_vector(heading + Fx::PI), false),
+                    5 => (home, next(2) == 0),
+                    _ => (FxVec2::new(Fx::from_ratio(next(201) as i64 - 100, 100), Fx::from_ratio(next(201) as i64 - 100, 100)).normalize_or_zero(), next(3) == 0),
+                };
+                turn.push(Command { player: owner(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Walk { direction, run } } });
+            }
+            Stop::Driving { .. } => {}
+            // Still: the gunner climbs down.
+            Stop::Stopping { since } if !walking && tick > since + seconds(0.5) => {
+                if seat(&sim, 1).is_some() {
+                    turn.push(Command { player: owner(1), kind: CommandKind::Board { agent: agents[1] } });
+                }
+                stop = Stop::Loading { since: tick };
+            }
+            Stop::Stopping { since } => assert!(tick < since + seconds(5.0), "tick {tick}: the crawler didn't stop"),
+            // Down beside the box: stone in hand, loaded by hand.
+            Stop::Loading { since } if tick == since + 2 => {
+                if seat(&sim, 1).is_none() {
+                    let s = sim.world_mut().settlement_mut();
+                    let room = 20 - s.vehicles[0].gun.as_ref().unwrap().store.count(stone);
+                    let n = room.min(5 - s.agents[agents[1] as usize].carry.inventory.count(stone).min(5));
+                    if n > 0 {
+                        let pile = s.depots.iter().position(|d| d.id == "lab_stone").unwrap();
+                        if s.depots[pile].inventory.count(stone) < n {
+                            // The pile is topped up from nowhere, counted as generated.
+                            assert!(s.depots[pile].inventory.add(stone, 40));
+                            s.accounts[stone as usize].generated += 40;
+                        }
+                        s.depots[pile].inventory.remove(stone, n);
+                        assert!(s.agents[agents[1] as usize].carry.inventory.add(stone, n));
+                        turn.push(Command { player: owner(1), kind: CommandKind::Interact { agent: agents[1], target: InteractTarget::Gun(0) } });
+                        t.restocks += 1;
+                    }
+                }
+            }
+            Stop::Loading { since } => {
+                let s = sim.world().settlement().unwrap();
+                let a = &s.agents[agents[1] as usize];
+                let done = a.carry.job.is_none() && s.transfers.is_empty() && a.carry.inventory.count(stone) == 0;
+                if tick > since + seconds(4.0) && (done || tick > since + seconds(10.0)) {
+                    let left = a.carry.inventory.count(stone);
+                    if left > 0 && a.carry.job.is_none() && s.transfers.is_empty() {
+                        // What didn't fit goes back on the pile.
+                        let s = sim.world_mut().settlement_mut();
+                        let pile = s.depots.iter().position(|d| d.id == "lab_stone").unwrap();
+                        s.agents[agents[1] as usize].carry.inventory.remove(stone, left);
+                        assert!(s.depots[pile].inventory.add(stone, left));
+                    }
+                    let s = sim.world().settlement().unwrap();
+                    let a = &s.agents[agents[1] as usize];
+                    if a.avatar().unwrap().seat.is_none() {
+                        // Knocked or wandered off: put them back beside the box.
+                        if !beside_box(s, a.body.position) {
+                            let c = def.crawler.as_ref().unwrap();
+                            let spot = crawler::board_spot(&s.vehicles[0], c, a.body.position, a.body.base_radius, sim.world().terrain());
+                            if let Some((p, h)) = spot {
+                                let a = &mut sim.world_mut().settlement_mut().agents[agents[1] as usize];
+                                a.body.position = p;
+                                a.body.velocity = FxVec2::ZERO;
+                                a.body.route.clear();
+                                a.avatar_mut().unwrap().height = h;
+                                t.regrounded += 1;
+                            }
+                        }
+                        turn.push(Command { player: owner(1), kind: CommandKind::Board { agent: agents[1] } });
+                    }
+                    stop = Stop::Boarding { since: tick };
+                }
+            }
+            Stop::Boarding { since } if tick == since + 1 => {
+                if seat(&sim, 1) == Some(Seat::Gunner { vehicle: 0 }) {
+                    t.bumps += 1;
+                }
+                stop = Stop::Driving { at: tick + seconds(15.0 + next(10) as f64) };
+                until = tick;
+            }
+            Stop::Boarding { .. } => {}
+        }
+        // The elder gunner shoots the nearest threat in range, and throws
+        // the fireball at it now and then.
+        if seat(&sim, 1) == Some(Seat::Gunner { vehicle: 0 }) && tick % 3 == 0 {
+            let s = sim.world().settlement().unwrap();
+            let range = super::gun::gun_of(&def).unwrap().1.defence.range;
+            let nearest = s.threats.iter().map(|th| th.position - mount.0).filter(|o| o.length() <= range).min_by_key(|o| o.length_squared());
+            if let Some(offset) = nearest {
+                if tick >= next_fireball && next(4) == 0 {
+                    turn.push(Command { player: owner(1), kind: CommandKind::AimAvatar { agent: agents[1], aim: offset } });
+                    turn.push(Command { player: owner(1), kind: CommandKind::Burst { agent: agents[1] } });
+                    next_fireball = tick + seconds(5.0);
+                } else {
+                    turn.push(Command { player: owner(1), kind: CommandKind::Attack { agent: agents[1], weapon: content::scenario::Weapon::Sword, aim: offset, muzzle: [Fx::ZERO; 3] } });
+                }
+            }
         }
         // Something under a foot a tick before it lands.
         if tick >= next_put {
@@ -641,67 +821,105 @@ fn soak(minutes: f64, seed: u64) {
             let landing = legs.feet.iter().find_map(|f| f.swing.as_ref().filter(|w| w.progress + 1 == swing).map(|w| (w.to, w.floor)));
             if let Some((to, floor)) = landing {
                 let s = sim.world_mut().settlement_mut();
-                if put % 3 != 2 && !s.threats.is_empty() {
-                    let t = &mut s.threats[0];
-                    (t.position, t.height, t.windup) = (to, floor, None);
-                    put += 1;
-                    next_put = tick + seconds(1.5);
-                } else if put % 3 == 2 {
+                if t.puts % 3 != 2 && !s.threats.is_empty() {
+                    let th = &mut s.threats[0];
+                    (th.position, th.height, th.windup) = (to, floor, None);
+                    t.puts += 1;
+                    next_put = tick + seconds(3.0);
+                } else if t.puts % 3 == 2 {
                     let a = &mut s.agents[agents[4] as usize];
                     a.body.position = to + FxVec2::new(Fx::from_ratio(1, 10), Fx::ZERO);
                     a.body.velocity = FxVec2::ZERO;
                     a.avatar_mut().unwrap().height = floor;
-                    put += 1;
-                    next_put = tick + seconds(1.5);
+                    t.puts += 1;
+                    next_put = tick + seconds(3.0);
                 }
             }
         }
-        let before = sim.world().settlement().unwrap().vehicles[0].legs.as_ref().unwrap().up().count();
+        let (before, stored) = {
+            let s = sim.world().settlement().unwrap();
+            (s.vehicles[0].legs.as_ref().unwrap().up().count(), s.vehicles[0].gun.as_ref().unwrap().store.count(stone))
+        };
         sim.step(&turn);
+        checked(&sim, tick);
         let s = sim.world().settlement().unwrap();
-        s.validate().unwrap_or_else(|e| panic!("tick {tick}: {e}"));
-        s.validate_footholds(sim.world().terrain()).unwrap_or_else(|e| panic!("tick {tick}: {e}"));
         let v = &s.vehicles[0];
         let legs = v.legs.as_ref().unwrap();
-        lifts += legs.up().count().saturating_sub(before);
-        gaits[(legs.gait == Gait::Trot) as usize] += 1;
-        backing += legs.backing as u64;
+        t.lifts += legs.up().count().saturating_sub(before);
+        t.trot_ticks += (legs.gait == Gait::Trot) as u64;
+        t.backing += legs.backing as u64;
         assert_eq!(s.seat(agents[0] as usize), Some(Seat::Vehicle(0)), "tick {tick}: the pilot aboard");
-        let def = &s.characters[v.character as usize];
-        assert_eq!(s.agents[agents[1] as usize].body.position, v.seat_at(def, Some(crawler::GUNNER)).0, "tick {tick}: the gunner in their place");
-        for (place, &agent) in agents[2..4].iter().enumerate() {
-            assert_eq!(s.agents[agent as usize].body.position, v.seat_at(def, Some(crawler::RIDERS[place])).0, "tick {tick}: rider {place} in their place");
+        // Everyone aboard in their place.
+        for &agent in &agents[1..4] {
+            if let Some(seat) = s.seat(agent as usize) {
+                assert_eq!(s.agents[agent as usize].body.position, v.seat_at(&def, crawler::deck_spot(seat)).0, "tick {tick}: {seat:?} in their place");
+            }
         }
+        assert_eq!(s.seat(agents[2] as usize), Some(Seat::Rider { vehicle: 0, place: 0 }), "tick {tick}: the rider aboard");
+        let sprite = s.agents[ash].sprite().unwrap();
+        assert!(sprite.gun == Some(0) || sprite.rider.is_some(), "tick {tick}: the crew sprite aboard");
+        let manned_by_sprite = s.sprite_gunner_of(0) == Some(ash);
+        let loaded = s.vehicles[0].gun.as_ref().unwrap().store.count(stone);
+        let mut shots = 0;
         for e in &s.events {
             match *e {
-                super::Event::Hit { impact, killed, .. } => {
-                    assert_eq!(impact, super::Impact::Stomp, "tick {tick}: only feet hurt anyone");
-                    stomp_kills += killed as u64;
+                Event::Hit { impact, killed, projectile, agent, .. } => {
+                    // The gun's bolts land as a ballista's stock shot does
+                    // (`Impact::Arrow`), from no agent.
+                    let tally = match impact {
+                        Impact::Stomp => &mut t.stomp_kills,
+                        Impact::Arrow | Impact::BoltImpale | Impact::BoltPierce if projectile.is_some() && agent.is_none() => &mut t.bolt_kills,
+                        Impact::Fire => &mut t.fire_kills,
+                        other => panic!("tick {tick}: only feet, the gun's bolts and fire hurt anyone, not {other:?}"),
+                    };
+                    *tally += killed as u64;
                 }
-                super::Event::Footfall { shoved: n, .. } => shoved += n as u64,
+                Event::Footfall { shoved: n, .. } => t.shoved += n as u64,
+                Event::GunShot { vehicle: 0 } => shots += 1,
+                Event::FireballThrown { .. } => t.fireballs += 1,
                 _ => {}
             }
         }
-        assert_eq!(s.combat.kills, stomp_kills, "tick {tick}: every kill a stomp");
+        if manned_by_sprite {
+            t.sprite_bolts += shots;
+        } else {
+            t.elder_bolts += shots;
+        }
+        t.stone_loaded += (loaded + shots as u32).saturating_sub(stored) as u64;
+        assert_eq!(s.combat.kills, t.stomp_kills + t.bolt_kills + t.fire_kills, "tick {tick}: every kill a stomp, a bolt or fire");
     }
-    assert!(lifts as f64 > 60.0 * minutes, "it walked: {lifts} lifts");
-    assert!(gaits[1] > ticks / 20 && backing > ticks / 50, "it trotted ({} ticks) and backed ({backing} ticks)", gaits[1]);
-    let ghouls = put - put / 3;
-    eprintln!("soak {minutes} min: {lifts} lifts, {} ticks trotting, {backing} backing, {put} puts ({ghouls} ghouls), {stomp_kills} stomp kills, {shoved} shoved", gaits[1]);
-    assert!(stomp_kills * 10 >= ghouls * 9 && stomp_kills > 0, "{stomp_kills} kills of {ghouls} ghouls put under a foot ({put} puts)");
-    assert!(shoved > 0, "the elder on the ground was shoved");
+    let s = sim.world().settlement().unwrap();
+    let spent = s.accounts[stone as usize].spent;
+    eprintln!("soak {minutes} min: {t:?}, stone spent {spent}");
+    assert!(t.lifts as f64 > 50.0 * minutes, "it walked: {} lifts", t.lifts);
+    assert!(t.trot_ticks > ticks / 25 && t.backing > ticks / 60, "it trotted ({} ticks) and backed ({} ticks)", t.trot_ticks, t.backing);
+    assert_eq!(spent, t.elder_bolts + t.sprite_bolts, "a stone a bolt");
+    let ghouls = t.puts - t.puts / 3;
+    assert!(t.stomp_kills * 10 >= ghouls * 8 && t.stomp_kills > 0, "{} stomp kills of {ghouls} ghouls put under a foot", t.stomp_kills);
+    assert!(t.shoved > 0, "the elder on the ground was shoved");
+    assert!(t.elder_bolts > 0 && t.sprite_bolts > 0 && t.bolt_kills > 0, "both gunners shot and killed");
+    assert!(t.fireballs > 0, "the fireball was thrown");
+    assert!(t.restocks > 0 && t.stone_loaded > 0 && t.bumps > 0, "loaded by hand and bumped");
+    t
+}
+
+/// Whether `at` is beside the crawler's box, within the boarding reach.
+fn beside_box(s: &super::Settlement, at: FxVec2) -> bool {
+    let v = &s.vehicles[0];
+    let c = s.characters[v.character as usize].crawler.as_ref().unwrap();
+    (crawler::box_nearest(Pose::of(v), c, at) - at).length() < Fx::from_ratio(7, 10)
 }
 
 /// Four minutes of the soak, every check every tick.
 #[test]
-fn four_minutes_driving_with_riders_among_ghouls_validates() {
+fn four_minutes_driving_and_shooting_among_ghouls_validates() {
     soak(4.0, 0x50a6);
 }
 
 /// The long soak: half an hour. Run by hand (`--test_arg=--ignored`).
 #[test]
 #[ignore]
-fn half_an_hour_driving_with_riders_among_ghouls_validates() {
+fn half_an_hour_driving_and_shooting_among_ghouls_validates() {
     soak(30.0, 0x50a7);
 }
 

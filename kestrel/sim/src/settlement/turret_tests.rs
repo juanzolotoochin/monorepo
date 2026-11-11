@@ -219,7 +219,7 @@ fn an_elder_gunner_fires_at_the_reticle_clamped_at_the_period() {
             assert_eq!((p.from, p.target), (from, None));
             assert!(close(p.to, from + cut), "at the reticle: {:?} from {:?}", p.to, from);
             assert_eq!(p.launch_height, height - sim.world().terrain().height(from), "from the gun's height");
-            assert!(height > s.vehicles[0].height + Fx::from_int(4), "about 4.3 m up");
+            assert!(height > s.vehicles[0].height + Fx::from_int(4), "about 4.8 m up");
             fired.push((sim.world().tick(), from));
         }
     }

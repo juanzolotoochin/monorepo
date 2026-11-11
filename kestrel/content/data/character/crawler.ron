@@ -36,13 +36,15 @@
             trot: (cycle: 60, swing: 27, lift: 0.6),
             // The gun (kestrel/CRAWLER_TURRET.md, T1, T7): on the cab's
             // roof (the rig's cab covers 0.8 to 2.3 m ahead of the middle
-            // and stands 1.3 m over the deck), so about 4.3 m over its
-            // feet, swivelling all round. Its numbers are the Sacred
+            // and stands 1.3 m over the deck), swivelling all round. Bolts
+            // leave from its bow, half a meter over the roof (the rig's
+            // `gun` stands on the roof with its bow at this height), so
+            // about 4.8 m over its feet. Its numbers are the Sacred
             // Tree's ballista's (sacred_tree_supply.ron), but for a store
             // of 20 stones and a 7 m range: a bolt every 0.7 s for 1, and
             // the possessing gunner's fireball every 25 s.
             gun: (
-                mount: (along: 1.55, across: 0.0), height: 1.3,
+                mount: (along: 1.55, across: 0.0), height: 1.8,
                 defence: (ammo: "stone", ammo_cap: 20, range: 7.0, period: 0.7, damage: 1, projectile_speed: 8.0,
                     fireball: Some((cooldown: 25.0, speed: 6.0, damage: 1, radius: 1.0, fire_radius: 1.5, fire_seconds: 4.0,
                         burn_damage: 1, burn_period: 1.5, burn_linger: 1.0))),

@@ -323,9 +323,10 @@ mod tests {
         assert!(parse("(body: [], leg: ())").is_err());
     }
 
-    /// The gun (TU.5 of the turret) stands on the cab's roof at the mount,
-    /// and at any turn it swivels clear of what stands up from the roof
-    /// (the stack and the dome) and of the riders' places.
+    /// The gun (TU.5 of the turret) stands on the cab's roof with its bow
+    /// at the mount, where the sim's bolts leave from (TU.6), and at any
+    /// turn it swivels clear of what stands up past the roof (the stack)
+    /// and of the riders' places.
     #[test]
     fn the_gun_swivels_clear_on_the_cab_roof() {
         let c = crawler();
@@ -333,11 +334,14 @@ mod tests {
         let mount = gun_local(gun);
         let rig = builtin();
         assert!(!rig.gun.is_empty());
-        // Over the cab's roof, on its top.
+        // On the cab's roof, its top.
         let roof = rig.body.iter().filter(|p| p.material == Finish::Brass && (p.at[2] - mount.z).abs() < 0.01 && p.at[0] == 0.0).map(|p| p.at[1] + p.size[1] / 2.0).fold(f32::MIN, f32::max);
-        assert!((roof - mount.y).abs() < 0.05, "the mount at {} on the roof at {roof}", mount.y);
         let lowest = rig.gun.iter().map(|p| p.at[1] - p.size[1] / 2.0).fold(f32::MAX, f32::min);
-        assert!(mount.y + lowest >= roof - 0.03, "the gun sits on the roof, not in it");
+        assert!((mount.y + lowest - roof).abs() < 0.03, "the gun's foot at {} on the roof at {roof}", mount.y + lowest);
+        // The bow, the widest piece, is level with the mount: bolts leave
+        // from it, not from the turntable.
+        let bow = rig.gun.iter().max_by(|a, b| a.size[0].total_cmp(&b.size[0])).unwrap();
+        assert!(bow.size[0] > 1.0 && bow.at[1].abs() < 0.05, "the bow at {} over the mount", bow.at[1]);
         // How far out from the mount any of it reaches, turned any way.
         let reach = rig.gun.iter().map(|p| {
             let t = p.transform();
@@ -345,8 +349,8 @@ mod tests {
             let corners = (0..8).map(|i| t.translation + t.rotation * (half * Vec3::new([-1.0, 1.0][i & 1], [-1.0, 1.0][(i >> 1) & 1], [-1.0, 1.0][i >> 2])));
             corners.map(|q| q.with_y(0.0).length()).fold(0.0f32, f32::max)
         }).fold(0.0f32, f32::max);
-        assert!(reach < 0.8, "the gun reaches {reach} m");
-        for piece in rig.body.iter().filter(|p| p.at[1] + p.size[1] / 2.0 > mount.y + 0.05) {
+        assert!(reach < 1.1, "the gun reaches {reach} m");
+        for piece in rig.body.iter().filter(|p| p.at[1] + p.size[1] / 2.0 > roof + 0.05) {
             let off = Vec2::new(piece.at[0] - mount.x, piece.at[2] - mount.z).length() - piece.size[0].max(piece.size[2]) / 2.0;
             assert!(off > reach, "{piece:?} {off} m from the mount, in the gun's way ({reach})");
         }

@@ -639,7 +639,7 @@ mod tests {
         // 4 m over its feet, and the ballista's numbers but for its store
         // and range.
         let gun = crawler.gun.as_ref().expect("a gun");
-        assert_eq!((gun.mount.along, gun.mount.across, gun.height), ("1.55".parse().unwrap(), Fx::ZERO, "1.3".parse().unwrap()));
+        assert_eq!((gun.mount.along, gun.mount.across, gun.height), ("1.55".parse().unwrap(), Fx::ZERO, "1.8".parse().unwrap()));
         assert!(crawler.deck + gun.height >= Fx::from_int(4));
         let d = &gun.defence;
         assert_eq!((d.ammo.as_str(), d.ammo_cap, d.range, d.period, d.damage), ("stone", 20, Fx::from_int(7), Fx::from_ratio(7, 10), 1));
@@ -668,7 +668,7 @@ mod tests {
         assert!(edit("swing: 33, lift: 0.9", "swing: 33, lift: 5.0").contains("walk.lift"));
         // Its gun is over the body and shoots sensibly.
         assert!(edit("mount: (along: 1.55", "mount: (along: 3.55").contains("crawler.gun.mount"));
-        assert!(edit("height: 1.3", "height: 7.0").contains("gun.height"));
+        assert!(edit("height: 1.8", "height: 7.0").contains("gun.height"));
         assert!(edit("range: 7.0", "range: 70.0").contains("crawler.gun.defence"));
         assert!(edit("ammo_cap: 20", "ammo_cap: 0").contains("crawler.gun.defence"));
         assert!(characters(&[("character/x.ron", &CRAWLER.replace("gun: (", "unused: ("))]).is_err(), "no unknown fields");

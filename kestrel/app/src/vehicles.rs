@@ -571,6 +571,59 @@ mod tests {
         assert!(last < 1.05, "eased back in to {last}");
     }
 
+    /// A scripted guest pilots the crawler (`guest_drive`, TU.6 of the
+    /// crawler turret) while the local elder mans its gun and fires: the
+    /// guest's stick walks it south, the elder's doesn't steer it.
+    #[test]
+    fn a_scripted_guest_pilots_while_the_elder_mans_the_gun() {
+        let script = serde_json::json!({
+            "version": 1, "scene": "crawler-lab", "fps": 30, "width": 640, "height": 480, "max_frames": 600,
+            "steps": [
+                { "op": "guest_join", "guest": 1 },
+                { "op": "wait", "frames": 10 },
+                { "op": "guest_walk", "guest": 1, "position": [0.2, -1.4] },
+                { "op": "wait", "frames": 14 },
+                { "op": "walk", "position": [0.6, 0] },
+                { "op": "wait", "frames": 20 },
+                { "op": "guest_board", "guest": 1 },
+                { "op": "wait", "frames": 10 },
+                { "op": "board" },
+                { "op": "wait", "frames": 20 },
+                { "op": "guest_drive", "guest": 1, "direction": [0, 1] },
+                { "op": "settlement_fire", "x": 0.0, "y": 5.0 },
+                { "op": "wait", "frames": 150 },
+                { "op": "guest_drive", "guest": 1, "direction": [0, 0] },
+                { "op": "wait", "frames": 30 }
+            ]
+        });
+        let options = crate::control::Options { simulation: true, script: Some(serde_json::from_value(script).unwrap()), ..default() };
+        let library = crate::assets::SceneLibrary::new();
+        let index = library.index("crawler-lab").unwrap();
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(index));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 30.0)));
+        crate::start_world(&mut app);
+        let (mut start, mut state, mut bolts) = (None, serde_json::Value::Null, 0);
+        for _ in 0..560 {
+            app.update();
+            let hub = app.world().resource::<crate::control::Hub>();
+            assert!(hub.failed.is_none(), "{}", hub.report(0));
+            if hub.finished.is_some() {
+                break;
+            }
+            state = crate::settlement::snapshot(app.world());
+            let guest = state["simulation"]["agents"]["player-1"]["position"][1].as_f64();
+            if state["seat"]["gunner"] == true {
+                start = start.or(guest);
+            }
+            bolts = bolts.max(state["simulation"]["projectiles"].as_object().map_or(0, |p| p.len()));
+        }
+        assert_eq!(state["seat"], serde_json::json!({"vehicle": 0, "gunner": true}), "the elder mans the gun");
+        let moved = state["simulation"]["agents"]["player-1"]["position"][1].as_f64().unwrap() - start.expect("the elder boarded");
+        assert!(moved > 1.0, "the guest walked it south: {moved} m");
+        assert_eq!(bolts, 1, "the elder fired once");
+    }
+
     /// The control protocol's sprite job `"crew"` (TU.4 of the crawler
     /// turret) sends a lab sprite to the crawler's gun, as a demo script
     /// does: the view reads it as at the gun and draws it up on the deck.
