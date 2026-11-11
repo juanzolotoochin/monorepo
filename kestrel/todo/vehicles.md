@@ -3,6 +3,102 @@
 The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 (decisions C1–C12). Its tasks CR.1–CR.6 are done (see Done); what's left
 of it is in the open entries below.
+The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
+(decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
+branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
+
+## TU.1 The gunner's seat and the lab
+
+- **Status:** open
+- **Why:** T2, T3, T7, T10: somewhere to stand and something to shoot.
+- **What to do:** the crawler's own `defence` section in content (copied
+  from the ballista's: stone, cap 20, range 7 m, its period, damage and
+  fireball) and its gun mount on the cab's roof; a gunner seat in `Seat`
+  (the back rider place becomes it: pilot, gunner, two riders); G boards
+  the cab, then the gun, then the riders. The lab: waves of ghouls on a
+  timer from two sides, two sprites, a stone pile. Save format up.
+- **Where:** `content/src/character.rs` (`CrawlerDef`),
+  `content/data/character/crawler.ron`, `sim/src/settlement/avatar.rs`,
+  `crawler.rs`, `vehicle.rs`, `app/assets/levels/crawler_lab*.ron`.
+- **Found in:** crawler turret design.
+- **Tests:** boarding order; a fifth can't; the gunner climbs down like a
+  rider; saves round-trip; the lab loads with its waves and sprites.
+
+## TU.2 The turret shoots
+
+- **Status:** open
+- **Why:** T5, T8, T9.
+- **What to do:** `VehicleState` gets a turret (ready, aim, fired) and an
+  ammo store; the ballista's helpers (pick a target, launch a bolt, the
+  fireball) take a mount position instead of a building. A sprite gunner
+  (seated directly by tests until TU.4) shoots the nearest threat in range
+  from the moving mount; an elder gunner's reticle, `Attack` and Burst
+  key fire bolts and the fireball as at the ballista. Nobody aboard can
+  be hit; ghouls ignore the crawler. Prediction of a gunner's shots.
+- **Where:** `sim/src/settlement/buildings.rs`, `combat.rs`, `fire.rs`,
+  `avatar.rs`, `vehicle.rs`.
+- **Found in:** crawler turret design.
+- **Tests:** a sprite gunner hits the nearest threat while walking; an
+  elder fires at the reticle, clamped to 7 m, at the period, and the
+  fireball on its cooldown; nothing fires empty; the town's and the
+  forest's golden behaviour lines unchanged; prediction replay matches.
+
+## TU.3 Ammo
+
+- **Status:** open
+- **Why:** T6.
+- **What to do:** an elder carrying stone interacts beside a stopped
+  crawler and delivers as much as fits (cap 20), as at the ballista; a
+  walking crawler takes none. Bolts spend stone (balances); the fireball
+  doesn't. The lab starts it full.
+- **Where:** `sim/src/settlement/interact.rs`, `vehicle.rs`.
+- **Found in:** crawler turret design.
+- **Tests:** a delivery while stopped; none while walking; the cap;
+  conservation holds.
+
+## TU.4 Crew the crawler
+
+- **Status:** open
+- **Why:** T3, T4.
+- **What to do:** a `SpriteJob` to crew a crawler, set through
+  `SetSpriteJob` like `Staff`: the sprite walks to it, climbs to the gun
+  when it stands still within reach, waits for a walking one; changing
+  the job climbs it down. An elder boarding takes the gun from a sprite,
+  which moves to a free rider place or climbs down. The lab sets the job
+  the way the town does if that's cheap, else from a key.
+- **Where:** `sim/src/settlement/` (sprites), `avatar.rs`, `vehicle.rs`,
+  the app's job controls.
+- **Found in:** crawler turret design.
+- **Tests:** a sprite boards a stopped crawler and shoots; waits for a
+  walking one; climbs down on a job change; an elder bumps it; saves and
+  hashes.
+
+## TU.5 The gun in the view
+
+- **Status:** open
+- **Why:** T1, T5.
+- **What to do:** the gun on the cab's roof in the rig
+  (`actors/crawler.ron`), swivelling to its aim; bolts and the fireball
+  leave from the mount; a gunner sees the reticle and gets the camera
+  pull; a sprite gunner drawn at its seat.
+- **Where:** `app/src/crawler.rs`, `vehicles.rs`, the ballista's view.
+- **Found in:** crawler turret design.
+- **Tests:** the gun turns to its aim; the reticle shows for an elder
+  gunner only; screenshots.
+
+## TU.6 Soak, demos and docs
+
+- **Status:** open
+- **Why:** the prototype is reviewed by video (T10).
+- **What to do:** a soak in the lab with waves, a pilot, a gunner and
+  sprites, `validate` every tick; two demo videos (a pilot and a guest
+  gunner clearing a wave; a sprite gunner); the full suite; a
+  `docs/test-time.md` row; `docs/vehicles.md`, `CRAWLER_TURRET.md`'s
+  status, a "Play the crawler's turret" section in
+  `todo/playtest-review.md`.
+- **Where:** sim tests, `app/demos/`, docs.
+- **Found in:** crawler turret design.
+- **Tests:** the soak; the full suite.
 
 ## Collide rovers with bodies
 
