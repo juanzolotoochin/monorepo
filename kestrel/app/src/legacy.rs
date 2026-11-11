@@ -722,8 +722,9 @@ pub enum Event {
     BuildingBurst { building: usize, units: u32 },
     /// Player `agent`'s Burst was refused; `reason.message()` says why.
     BurstRefused { agent: String, reason: s::BurstRefusal },
-    /// Ballista `building` threw a fireball.
-    FireballThrown { building: usize },
+    /// A ballista (`"building/N"`) or a crawler's gun (`"vehicle/N"`) threw
+    /// a fireball.
+    FireballThrown { from: String },
     /// A fireball came down at `position` and set the ground alight.
     FireballLanded { position: Point },
     /// A threat's swing at building `building` landed (`hit`) or missed;
@@ -871,6 +872,8 @@ impl Simulation {
             SimHolder::Pile(_) | SimHolder::Collector => None,
             SimHolder::Output(b) => Some(Endpoint::Output(b)),
             SimHolder::Site(b) => Some(Endpoint::Site(b)),
+            // Nothing flies to a crawler's gun yet (deliveries are TU.3's).
+            SimHolder::Gun(_) => None,
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -1075,8 +1078,15 @@ impl Simulation {
                     s::Event::BuildingBurst { building, units } => Event::BuildingBurst { building: *building as usize, units: *units },
                     // A ballista building's shot sounds as a defender's.
                     s::Event::BuildingShot { building } => Event::Shot { defender: format!("building/{building}") },
+                    // And a crawler's gun's (TU.2 of the turret).
+                    s::Event::GunShot { vehicle } => Event::Shot { defender: format!("vehicle/{vehicle}") },
                     s::Event::BurstRefused { agent, reason } => Event::BurstRefused { agent: agent_name(*agent), reason: *reason },
-                    s::Event::FireballThrown { building, .. } => Event::FireballThrown { building: *building as usize },
+                    s::Event::FireballThrown { mount, .. } => Event::FireballThrown {
+                        from: match mount {
+                            s::Mount::Building(b) => format!("building/{b}"),
+                            s::Mount::Gun(v) => format!("vehicle/{v}"),
+                        },
+                    },
                     s::Event::FireballLanded { position } => Event::FireballLanded { position: p(*position) },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,

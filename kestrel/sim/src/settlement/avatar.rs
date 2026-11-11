@@ -21,7 +21,7 @@ use super::action::{Action, View};
 use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, GunnerFire, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, LAYER};
 use crate::volume::BODY_HEIGHT;
@@ -649,8 +649,9 @@ impl Settlement {
             self.events.push(Event::BundleRefused { agent, reason });
         }
         self.install(messages.install);
-        self.bursts(messages.burst, tick);
+        self.bursts(messages.burst, tick, terrain);
         self.elder_fire(messages.elder_fire, tick);
+        self.gunner_fire(messages.gunner_fire, tick, terrain);
         for BurstRefused { agent, reason } in messages.burst_refused {
             self.events.push(Event::BurstRefused { agent, reason });
         }
@@ -921,17 +922,48 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // Sitting in a vehicle, a player can look around, climb out,
             // let go or respawn; a driver's movement went to the vehicle
             // (`vehicle::drive`), and a rider's or a gunner's does nothing.
+            // At a crawler's gun (TU.2 of the turret) it is a ballista's
+            // possessing elder: the aim is the reticle, an offset from the
+            // gun's mount cut to its range (moving with the crawler),
+            // `Attack` shoots there and the Burst key throws the gun's
+            // fireball; stage 5 checks the ammo and the reload
+            // (`Settlement::gunner_fire`, `bursts`).
             let ix = seat.aboard().expect("aboard a vehicle");
+            let gunner = matches!(seat, Seat::Gunner { .. });
+            let range = super::gun::range(view.vehicles, view.characters, ix).filter(|_| gunner);
             match *action {
                 Action::Board => {
                     let v = &view.vehicles[ix as usize];
                     let vehicle_def = &view.characters[v.character as usize];
                     if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, super::crawler::deck_spot(seat), def.body.radius, view.terrain) {
                         avatar.seat = None;
+                        if gunner {
+                            // The reticle back to a facing, as leaving a ballista.
+                            avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
+                        }
                         body.position = position;
                         avatar.height = ground;
                         avatar.flight.support = ground;
                         avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
+                }
+                Action::Aim(offset) if range.is_some() => {
+                    if let Some(reticle) = range.and_then(|range| super::buildings::reticle(offset, range)) {
+                        avatar.aim = Some(reticle);
+                    }
+                    return;
+                }
+                Action::Attack { aim, .. } if range.is_some() => {
+                    if let Some(reticle) = range.and_then(|range| super::buildings::reticle(aim, range)).filter(|_| body.alive()) {
+                        avatar.aim = Some(reticle);
+                        out.gunner_fire.push(GunnerFire { agent: me, vehicle: ix, offset: reticle });
+                    }
+                    return;
+                }
+                Action::Burst if gunner => {
+                    if body.alive() {
+                        out.burst.push(Burst { agent: me });
                     }
                     return;
                 }
@@ -1279,7 +1311,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
         InventoryRef::Site(b) => view.buildings.get(b as usize).and_then(|b| b.site()).map(|(_, materials)| materials),
         // A dispenser's output is the pile lab's alone.
         InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).filter(|p| p.source.is_none()).map(|p| &p.inventory),
-        InventoryRef::Agent(_) | InventoryRef::Collector => None,
+        // A crawler's gun takes no bundles yet (deliveries are TU.3's).
+        InventoryRef::Agent(_) | InventoryRef::Collector | InventoryRef::Gun(_) => None,
     };
     let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
     let cargo = &carry.inventory;

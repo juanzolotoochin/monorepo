@@ -252,7 +252,7 @@ pub fn stand_spot(view: &View, holder: InventoryRef, from: FxVec2) -> Option<FxV
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
         InventoryRef::Output(b) | InventoryRef::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position + (b.output_position - b.position).normalize_or_zero() * STAND_GAP),
         InventoryRef::Pile(id) => view.piles?.piles.get(&id).map(|p| p.position + (from - p.position).normalize_or_zero() * PILE_STAND),
-        InventoryRef::Agent(_) | InventoryRef::Collector => None,
+        InventoryRef::Agent(_) | InventoryRef::Collector | InventoryRef::Gun(_) => None,
     }
 }
 

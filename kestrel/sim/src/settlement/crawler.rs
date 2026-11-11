@@ -186,7 +186,7 @@ pub struct Standing {
 pub fn standing(agents: &[AgentState]) -> Vec<Standing> {
     agents
         .iter()
-        .filter(|a| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.inside()))
+        .filter(|a| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.sheltered()))
         .map(|a| Standing { position: a.body.position, radius: a.radius(), height: a.height() })
         .collect()
 }
@@ -786,7 +786,7 @@ impl Settlement {
                     .agents
                     .iter()
                     .enumerate()
-                    .filter(|(_, a)| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.inside()))
+                    .filter(|(_, a)| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.sheltered()))
                     .filter(|(_, a)| under_foot(terrain, spot, floor, a.body.position, a.radius(), a.height()))
                     .map(|(i, _)| i as AgentIx)
                     .collect();
@@ -810,7 +810,7 @@ impl Settlement {
         let mut shoved = 0;
         for a in agents {
             let Some(agent) = self.agents.get(a as usize) else { continue };
-            let seated = agent.avatar().is_some_and(|p| p.seat.is_some()) || agent.sprite().is_some_and(|s| s.inside());
+            let seated = agent.avatar().is_some_and(|p| p.seat.is_some()) || agent.sprite().is_some_and(|s| s.sheltered());
             let (position, radius, height) = (agent.body.position, agent.radius(), agent.height());
             if !agent.body.alive() || seated || !under_foot(terrain, spot, floor, position, radius, height) {
                 continue;

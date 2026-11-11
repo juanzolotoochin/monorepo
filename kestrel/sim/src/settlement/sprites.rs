@@ -287,6 +287,12 @@ pub struct SpriteState {
     /// How light stands to it this tick (M8.7): not state.
     #[serde(skip)]
     pub light: Lighting,
+    /// The crawler whose gun it mans (TU.2 of the crawler turret, format
+    /// 51): it stands at the gunner's place (`seat_housekeeping`), its
+    /// brain waits, it shoots the nearest threat in range on its own
+    /// (`Settlement::aim_guns`), and nothing can hit it.
+    #[serde(default)]
+    pub gun: Option<super::VehicleIx>,
 }
 
 impl SpriteState {
@@ -344,6 +350,13 @@ impl SpriteState {
     /// Inside a building, working.
     pub fn inside(&self) -> bool {
         matches!(self.holds, Some(Hold::Inside(_)))
+    }
+
+    /// Out of harm's and feet's way: inside a building, or at a crawler's
+    /// gun (TU.2 of the turret). Nothing chases or hits it, and it stands
+    /// in nobody's way.
+    pub fn sheltered(&self) -> bool {
+        self.inside() || self.gun.is_some()
     }
 
     /// The building the plan claims, if it claims one.
@@ -776,6 +789,11 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if !a.body.alive() {
         return;
     }
+    // At a crawler's gun it does nothing of its own: housekeeping keeps it
+    // in its place (TU.2 of the turret; the crew job is TU.4's).
+    if a.sprite().is_some_and(|s| s.gun.is_some()) {
+        return;
+    }
     let def = super::avatar::character_of(ctx.characters, a);
     if a.sprite().is_some_and(|s| s.job == SpriteJob::Follow) {
         let walk = def.movement.walk.div_int(content::TICKS_PER_SECOND as i64);
@@ -910,7 +928,7 @@ impl Settlement {
     /// carry job (giving back what it holds on both sides; units in the air
     /// still land), its dig and its dig claim. What it carries it keeps, to
     /// take to the tree's stone pile when it plans again.
-    fn drop_sprite_errand(&mut self, agent: usize) {
+    pub(super) fn drop_sprite_errand(&mut self, agent: usize) {
         let releases = self.agents[agent].carry.drop_carry(agent as AgentIx);
         self.reserve_stock(releases);
         let sprite = self.agents[agent].sprite_mut().expect("a sprite");

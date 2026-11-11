@@ -7,37 +7,6 @@ The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
 (decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
 branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 
-## TU.2 The turret shoots
-
-- **Status:** open
-- **Why:** T5, T8, T9.
-- **What to do:** `VehicleState` gets a turret (ready, aim, fired) and an
-  ammo store; the ballista's helpers (pick a target, launch a bolt, the
-  fireball) take a mount position instead of a building. A sprite gunner
-  (seated directly by tests until TU.4) shoots the nearest threat in range
-  from the moving mount; an elder gunner's reticle, `Attack` and Burst
-  key fire bolts and the fireball as at the ballista. Nobody aboard can
-  be hit; ghouls ignore the crawler. Prediction of a gunner's shots.
-- **Where:** `sim/src/settlement/buildings.rs`, `combat.rs`, `fire.rs`,
-  `avatar.rs`, `vehicle.rs`.
-- **Found in:** crawler turret design.
-- **Tests:** a sprite gunner hits the nearest threat while walking; an
-  elder fires at the reticle, clamped to 7 m, at the period, and the
-  fireball on its cooldown; nothing fires empty; the town's and the
-  forest's golden behaviour lines unchanged; prediction replay matches.
-- **Notes from TU.1:** the gun is `CrawlerDef::gun` (`GunDef`: `mount`,
-  `height` over the deck, `defence: scenario::Defence` with the ammo as
-  an item id). Resolve it to `buildings::Defence` (ticks, `ItemIx`) the
-  way `building_kinds` does (`buildings.rs`, the `defence:` closure:
-  worth making a function both use). Its `muzzle_height` is the default
-  1.6 m and means nothing on a gun: shots leave from `deck + height` at
-  `mount`. A gunner today goes through `avatar::act`'s seated branch with
-  riders: `Aim` passes through to the normal handling, `Attack` does
-  nothing and `Burst` is refused as `NotPossessing`; give `Seat::Gunner`
-  its own arm there. `Settlement::gunner_of(vehicle)` finds the gunner.
-  No turret or store state was added to `VehicleState` yet; the save
-  format is 50, so bump to 51.
-
 ## TU.3 Ammo
 
 - **Status:** open
@@ -55,6 +24,18 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   5.5 m from the parked crawler's west side; the gun's ammo is `stone`,
   an item id resolved per scenario (unchecked: a scene without stone
   parks a gun with nothing to load).
+- **Notes from TU.2:** the store is `VehicleState::gun.store`
+  (`gun::GunState`), `Kinds::Only(stone)`, capacity 20, and already starts
+  full in any scene with the ammo item (`Settlement::arm`, as `initial`
+  supply), so "the lab starts it full" is done; deliveries can start from
+  a test that empties it (`store.remove` plus `accounts[..].consumed`, as
+  `turret_tests::nothing_fires_empty`). The holder is
+  `InventoryRef::Gun(vehicle)`: `bundle_job` returns `NotAHolder` for it,
+  `interact::stand_spot` `None`, the app's transfer endpoint `None`, and
+  `position_of` gives the crawler's middle; `economy::land` already puts a
+  unit there. `validate_guns` refuses any reservation on the store: TU.3
+  replaces that with `expected_reservations(InventoryRef::Gun(v))`. Bolts
+  already spend stone (balances count the store as stored).
 
 ## TU.4 Crew the crawler
 
@@ -79,6 +60,17 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   sprite field, or a `VehicleState` crew slot); `free_seat` returns the
   gun only while `gunner_of` is `None`, so an elder bumping a sprite needs
   it to see the sprite too. `crawler::GUNNER` is where it stands.
+- **Notes from TU.2:** the sprite's link is `SpriteState::gun:
+  Option<VehicleIx>` (format 51); `Settlement::man_gun(agent, vehicle)`
+  seats one directly (drops its slot, errand and plan) and
+  `sprite_gunner_of(vehicle)` finds it. While set, its stage 2 returns at
+  once, housekeeping (`seat_housekeeping`) keeps it at `crawler::GUNNER`
+  at the deck's height (`SpriteState::height`), and `sheltered()` keeps
+  it out of chases, swings, feet and traffic. Nothing clears it yet:
+  `set_sprite_job` doesn't, and climbing down needs an exit spot
+  (`crawler::exit_spot` takes the seat's spot). `free_seat` skips the gun
+  while a sprite mans it; T3's bump replaces that. `validate_guns`
+  refuses a sprite and an elder at one gun.
 
 ## TU.5 The gun in the view
 
@@ -97,6 +89,20 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   at `crawler::GUNNER` behind the crates, drawn like a rider
   (`vehicles::deck_offset`); they already get `PILOT_PULL`. The control
   protocol's `seat` is `{"vehicle": 0, "gunner": true}` for a gunner.
+- **Notes from TU.2:** bolts (`projectile/N`, `arrow_view`) and the
+  fireball (`fire_glows`) already draw from the sim's projectiles, so
+  they leave the mount: `launch_height` is over the ground there
+  (`arrow_view` reads it as a height over 0 m, the same on the lab's flat
+  ground; the fireball adds the ground). The gun's aim is
+  `VehicleState::gun.turret.aim` (a world point, the last shot's) and an
+  elder gunner's reticle is `AvatarState::aim`, an offset from
+  `gun::mount`. The app doesn't drive a gunner yet: `input/town.rs`'s
+  reticle and fire key run only for a possessed ballista
+  (`Settlement::fire_check`); a gunner needs them with `gun_fire_check`,
+  `gun::range` and the mount as the reticle's origin. Until then a
+  gunner's left button sends the avatar's facing as the offset (a bolt
+  1 m out). `Event::GunShot` maps to the app's `Shot` (the ballista
+  cue).
 
 ## TU.6 Soak, demos and docs
 
@@ -121,6 +127,11 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   the demo has left it; its stomps are of the south-east wave as before
   (not re-rendered in TU.1). The lab's waves end at 137 s (24 ghouls):
   a longer soak or demo needs more, or widen a wave as the soak does.
+- **Notes from TU.2:** the soak can seat a sprite at the gun with
+  `Settlement::man_gun` and count `Event::GunShot`; the CR.5 soak check
+  "every kill a stomp" no longer holds once the gun shoots. The gun only
+  targets threats on the floor under its mount (`pick_target` in a
+  volume): see "A crawler's gun shoots only its own floor".
 
 ## Collide rovers with bodies
 
@@ -291,7 +302,117 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   `content/src/character.rs` (`GunDef`).
 - **Found in:** TU.1 of the crawler turret.
 
+## A crawler's gun shoots only its own floor
+
+- **Status:** open
+- **Why:** in a volume scene `pick_target` and a bolt's flight keep to
+  threats on the top floor at the shooter's position (`FLOOR_REACH`,
+  1.5 m). For the crawler's gun that is the floor under its mount, so a
+  crawler on the lab's plateau (1.5 m) or with its mount over the trench
+  can't shoot ghouls below it, though the gun is 4.3 m up.
+- **What to do:** give the gun's pick and bolts a floor range from the
+  mount's height (anything below it in range), or let a shot fly over
+  the floor at its target.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (`pick_target`,
+  `Projectile::floor_at`), `gun.rs`.
+- **Found in:** TU.2 of the crawler turret.
+
 ## Done
+
+## TU.2 The turret shoots
+
+- **Status:** done (branch `kestrel-crawler-turret`, PR to come with TU.6)
+- **Why:** T5, T8, T9.
+- **What to do:** `VehicleState` gets a turret (ready, aim, fired) and an
+  ammo store; the ballista's helpers (pick a target, launch a bolt, the
+  fireball) take a mount position instead of a building. A sprite gunner
+  (seated directly by tests until TU.4) shoots the nearest threat in range
+  from the moving mount; an elder gunner's reticle, `Attack` and Burst
+  key fire bolts and the fireball as at the ballista. Nobody aboard can
+  be hit; ghouls ignore the crawler. Prediction of a gunner's shots.
+- **Where:** `sim/src/settlement/buildings.rs`, `combat.rs`, `fire.rs`,
+  `avatar.rs`, `vehicle.rs`.
+- **Found in:** crawler turret design.
+- **Tests:** a sprite gunner hits the nearest threat while walking; an
+  elder fires at the reticle, clamped to 7 m, at the period, and the
+  fireball on its cooldown; nothing fires empty; the town's and the
+  forest's golden behaviour lines unchanged; prediction replay matches.
+- **Notes from TU.1:** the gun is `CrawlerDef::gun` (`GunDef`: `mount`,
+  `height` over the deck, `defence: scenario::Defence` with the ammo as
+  an item id). Resolve it to `buildings::Defence` (ticks, `ItemIx`) the
+  way `building_kinds` does (`buildings.rs`, the `defence:` closure:
+  worth making a function both use). Its `muzzle_height` is the default
+  1.6 m and means nothing on a gun: shots leave from `deck + height` at
+  `mount`. A gunner today goes through `avatar::act`'s seated branch with
+  riders: `Aim` passes through to the normal handling, `Attack` does
+  nothing and `Burst` is refused as `NotPossessing`; give `Seat::Gunner`
+  its own arm there. `Settlement::gunner_of(vehicle)` finds the gunner.
+  No turret or store state was added to `VehicleState` yet; the save
+  format is 50, so bump to 51.
+- **Done:** `sim/src/settlement/gun.rs` (new): `VehicleState::gun:
+  Option<GunState>` (`turret: Turret`, the ballista's, and `store:
+  Inventory`, `Kinds::Only(ammo)` up to the gun's cap), save format 51.
+  `Settlement::arm` gives a parked crawler with a `gun` a full store,
+  counted as `initial` supply, when the scenario has its ammo item, so the
+  lab starts full here (T6's "the lab starts it full"; TU.3 only adds
+  deliveries); without the item there is no store and `NoAmmo`. The gun's
+  numbers come from the definition each time through
+  `buildings::defence(&scenario::Defence, ammo)`, now shared with
+  `buildings::kinds`; `buildings::reticle(offset, range)` is shared with
+  `BuildingKind::reticle`. The mount is `gun::mount(v, c, gun)`:
+  `Pose::at(gun.mount)` at `v.height + c.deck + gun.height`; bolts and
+  fireballs carry their height over the ground there (`Launcher::height`,
+  `Fireball::launch_height`). The ballista's helpers already took a
+  position (`pick_target`, `launch_shot`); `launch_shot` spends from the
+  new holder `InventoryRef::Gun(vehicle)` (appended; balances and
+  `position_of` know it, bundles refuse it as `NotAHolder` until TU.3),
+  and `throw_fireball` takes `fire::Mount` (`Building(b)` or `Gun(v)`) and
+  a `from`; `Fireball::building` became `mount`, `Event::FireballThrown`
+  carries `mount`, and `Event::GunShot { vehicle }` is new (the app maps
+  both, as `Shot { defender: "vehicle/N" }` and `FireballThrown { from }`).
+  The behaviour digest hashes a ballista's fireballs in their old layout
+  and a gun's after them, so town digests don't move. A sprite gunner is
+  `SpriteState::gun: Option<VehicleIx>`, set by `Settlement::man_gun`
+  (drops slot, errand and plan); `sprite_gunner_of(v)`; housekeeping keeps
+  it at `crawler::GUNNER` at the deck's height; its stage 2 returns at
+  once; `SpriteState::sheltered()` (inside or at a gun) replaces
+  `inside()` in the chase, swing, foot and traffic checks. Stage 3
+  `aim_guns` (after `aim_buildings`) picks for a sprite-manned gun with
+  no elder there, stocked and reloaded; a new late queue
+  `Messages::gun_fire` (`GunFire`, after `building_fire` in stage 5)
+  shoots. The elder gunner has its own arms in `avatar::act`: `Aim` sets
+  the reticle (cut to 7 m), `Attack` queues `ActionMessages::gunner_fire`
+  (`GunnerFire { agent, vehicle, offset }`, applied after `elder_fire`;
+  the offset is added to the mount where it is in stage 5, so the reticle
+  moves with the crawler; it is an offset in world axes, not turning with
+  the crawler), Burst goes to `bursts`, which sends a gunner to
+  `gun_burst` (fireball on `fireball_ready`, half the range ahead along
+  the heading before any aim; no stone); climbing down turns the reticle
+  back into a facing. Refusals: `gun_fire_check` gives `NoAmmo`,
+  `Reloading` or the new `FireRefusal::NotAtGun` (the pilot, a rider);
+  `burst_check` answers for a gunner too. Everyone seated (any `Seat`,
+  not only a building) is out of threats' swings now; chases already
+  skipped them. `free_seat` skips the gun while a sprite mans it.
+  `validate_guns`: a store only on a crawler with a gun, of its ammo, its
+  cap, no reservations; a sprite gunner alive, holding no slot, alone at
+  its gun and with no elder. Tests (`turret_tests`, 7):
+  `a_sprite_gunner_hits_the_nearest_threat_in_range_while_walking` (each
+  bolt from the mount where it is that tick, at the target stage 3 would
+  pick, once a period; a ghoul 13 m off shot once the walk brings it in;
+  6 bolts, 6 stones spent, 3 kills),
+  `an_elder_gunner_fires_at_the_reticle_clamped_at_the_period`,
+  `the_gunners_fireball_on_its_cooldown_costs_no_stone`,
+  `nothing_fires_empty` (sprite and elder; the fireball still goes),
+  `the_pilot_and_riders_cannot_fire`, `nobody_aboard_is_hit` (walking
+  ghouls held under the seats for 20 s, elder and sprite gunner),
+  `a_firing_gunner_is_predicted_saved_and_hashed` (240 ticks of a
+  gunner's replay against the sim while aiming, firing and throwing; a
+  save with bolts in the air and a sprite at the gun, and four threads,
+  hash alike). `fire_tests` updated for `mount`. Results: `sim_test`
+  whole (413) and `save_test` pass; the golden file is unchanged, hash
+  and behaviour lines both (no golden scene has a vehicle, a fireball or
+  a sprite); app `movement_test` filtered to vehicles, crawler, control,
+  ballista and fireball (46) passes. Not run: the full suite (TU.6).
 
 ## TU.1 The gunner's seat and the lab
 

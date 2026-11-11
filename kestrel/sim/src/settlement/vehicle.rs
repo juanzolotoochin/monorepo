@@ -69,6 +69,11 @@ pub struct VehicleState {
     pub control: Control,
     /// A crawler's feet and gait (format 47); `None` for a rover.
     pub legs: Option<Legs>,
+    /// A crawler's gun: its turret and ammo store (format 51, TU.2 of the
+    /// turret, `gun`). `None` without a gun, or where the scenario has no
+    /// item for its ammo.
+    #[serde(default)]
+    pub gun: Option<super::gun::GunState>,
 }
 
 /// A driver's controls: a direction on the ground (length 0 to 1) and
@@ -98,7 +103,7 @@ impl VehicleState {
                 (wheels, mean(wheels), None)
             }
         };
-        Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default(), legs })
+        Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default(), legs, gun: None })
     }
 
     /// Where the driver sits: on the vehicle, facing its way, `seat` above
@@ -371,7 +376,9 @@ impl Settlement {
         }
         let v = &self.vehicles[ix as usize];
         let c = self.characters[v.character as usize].crawler.as_ref()?;
-        if c.gun.is_some() && self.gunner_of(ix).is_none() {
+        // A sprite at the gun keeps it until TU.4's crew job lets an elder
+        // take it from them.
+        if c.gun.is_some() && self.gunner_of(ix).is_none() && self.sprite_gunner_of(ix).is_none() {
             return Some(Seat::Gunner { vehicle: ix });
         }
         (0..crawler::RIDERS.len() as u8)
@@ -537,6 +544,20 @@ impl Settlement {
             if !driven {
                 v.control = Control::default();
             }
+        }
+        // A sprite at a crawler's gun (TU.2 of the turret) stands at the
+        // gunner's place, as an elder there does.
+        for a in &mut self.agents {
+            let AgentState { body, role: Role::Sprite(sprite), .. } = a else { continue };
+            let Some(ix) = sprite.gun else { continue };
+            let v = &self.vehicles[ix as usize];
+            let (position, height) = v.seat_at(&self.characters[v.character as usize], Some(crawler::GUNNER));
+            body.position = position;
+            body.heading = v.heading;
+            body.velocity = FxVec2::ZERO;
+            body.push = FxVec2::ZERO;
+            body.route.clear();
+            sprite.height = height;
         }
         for (i, building) in self.buildings.iter_mut().enumerate() {
             let Slot::Occupied(Occupant::Elder(a)) = building.slot else { continue };

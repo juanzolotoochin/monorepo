@@ -471,9 +471,12 @@ pub enum Event {
     BurstRefused { agent: AgentIx, reason: super::buildings::BurstRefusal },
     /// A ballista building fired, as a defender's `Shot`.
     BuildingShot { building: super::BuildingIx },
-    /// Elder `agent`, possessing ballista `building`, threw a fireball; it
-    /// lands at `to` on tick `arrival` (B4).
-    FireballThrown { agent: AgentIx, building: super::BuildingIx, to: FxVec2, arrival: u64 },
+    /// Crawler `vehicle`'s gun fired (TU.2 of the crawler turret), as a
+    /// ballista building's `BuildingShot`.
+    GunShot { vehicle: super::VehicleIx },
+    /// Elder `agent`, possessing a ballista or at a crawler's gun
+    /// (`mount`), threw a fireball; it lands at `to` on tick `arrival` (B4).
+    FireballThrown { agent: AgentIx, mount: super::fire::Mount, to: FxVec2, arrival: u64 },
     /// A fireball came down at `position` and set the ground alight.
     FireballLanded { position: FxVec2 },
     /// A threat started winding up a swing at building `building` (B8). It
@@ -775,8 +778,9 @@ impl Settlement {
         self.read_chase(tick, terrain, &mut result);
         if self.player_health > 0 {
             for (i, a) in self.agents.iter().enumerate() {
-                // A building shelters the elder possessing it (B6).
-                if a.avatar().is_some_and(|p| p.seat.and_then(super::Seat::building).is_none()) && a.body.health > 0 {
+                // A building shelters the elder possessing it (B6), and a
+                // crawler everyone aboard (T8 of the turret).
+                if a.avatar().is_some_and(|p| p.seat.is_none()) && a.body.health > 0 {
                     let mut out = Messages::default();
                     self.threats_in_reach(i as AgentIx, a, tick, terrain, &mut out);
                     if !out.is_empty() {
@@ -791,6 +795,7 @@ impl Settlement {
             result.push((d.position, out));
         }
         self.aim_buildings(tick, terrain, &mut result);
+        self.aim_guns(tick, terrain, &mut result);
         for (i, a) in self.agents.iter().enumerate() {
             if a.avatar().is_some() {
                 let mut out = Messages::default();
@@ -823,12 +828,14 @@ impl Settlement {
     }
 
     /// Whether a threat's swing can reach agent `a` at all: a live player
-    /// low enough (`SWING_HEIGHT`) and not possessing a building, or a
-    /// sprite outside a building: a building shelters its occupant (B6).
+    /// low enough (`SWING_HEIGHT`) and not seated (possessing a building or
+    /// aboard a vehicle), or a sprite outside a building and off a
+    /// crawler's gun: a building shelters its occupant (B6), a crawler
+    /// everyone aboard (T8 of the turret).
     fn swingable(&self, a: &super::AgentState, terrain: &Terrain) -> bool {
         match a.sprite() {
-            Some(sprite) => a.body.alive() && !sprite.inside(),
-            None => a.avatar().is_some_and(|p| p.seat.and_then(super::Seat::building).is_none()) && a.body.alive() && self.within_swing_height(a, terrain),
+            Some(sprite) => a.body.alive() && !sprite.sheltered(),
+            None => a.avatar().is_some_and(|p| p.seat.is_none()) && a.body.alive() && self.within_swing_height(a, terrain),
         }
     }
 

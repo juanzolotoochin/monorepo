@@ -156,7 +156,15 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 50: an avatar's seat can be a crawler's gun (`Seat::Gunner`, appended;
 ///     TU.1 of the crawler turret), and a crawler has two riders' places,
 ///     not three.
-pub const FORMAT_VERSION: u32 = 50;
+/// 51: a crawler's gun shoots (TU.2 of the crawler turret): a vehicle keeps
+///     its gun's turret and ammo store (`VehicleState::gun`), a sprite the
+///     crawler whose gun it mans (`SpriteState::gun`), a fireball what
+///     threw it (`Fireball::mount`, was a building's index), and the
+///     pending messages a queue of sprites' gun shots
+///     (`Messages::gun_fire`); a holder can be a gun's store
+///     (`InventoryRef::Gun`, appended, so older input logs decode
+///     unchanged).
+pub const FORMAT_VERSION: u32 = 51;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

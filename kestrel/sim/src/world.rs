@@ -946,6 +946,9 @@ impl World {
             for message in messages.building_fire {
                 settlement.building_fire(tick, message);
             }
+            for message in messages.gun_fire {
+                settlement.gun_fire(tick, message, &self.terrain);
+            }
             settlement.burn(tick, &self.terrain);
             settlement.threat_goals(messages.threat_goal, &self.terrain);
             settlement.claim_slots(messages.claim_slot);

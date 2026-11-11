@@ -119,7 +119,7 @@ impl Settlement {
             InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
             // Nothing sends units to an output yet; this keeps `land` whole.
             // A delivery lands in a site's materials.
-            InventoryRef::Output(_) | InventoryRef::Site(_) => self.inventory_mut(t.to).put(t.item, 1),
+            InventoryRef::Output(_) | InventoryRef::Site(_) | InventoryRef::Gun(_) => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 

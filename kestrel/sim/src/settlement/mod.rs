@@ -23,6 +23,7 @@ pub mod clock;
 pub mod combat;
 pub mod crawler;
 pub mod fire;
+pub mod gun;
 mod economy;
 mod follow;
 mod haulers;
@@ -56,7 +57,7 @@ pub use avatar::Seat;
 pub use chase::{Goal, Quarry};
 pub use clock::{Clock, TimeOfDay};
 pub use follow::Backoff;
-pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
+pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball, Mount};
 pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
 pub use interact::{InteractTarget, Interaction};
@@ -136,6 +137,9 @@ pub enum InventoryRef {
     /// A site's materials, which a bundle delivers to and nothing takes
     /// from (D4). Units land beside the site, where its output pile will be.
     Site(BuildingIx),
+    /// A crawler's gun's ammo store (`vehicle::GunState::store`, TU.2 of
+    /// the crawler turret): each bolt spends a unit from it.
+    Gun(VehicleIx),
 }
 
 impl InventoryRef {
@@ -733,8 +737,9 @@ impl Settlement {
             if def.brain != Brain::Vehicle {
                 return Err(format!("vehicle {:?} is a {:?} character; it needs a Vehicle one", v.character, def.brain));
             }
-            let parked = VehicleState::new(ix, def, at(v.position), v.heading, terrain)
+            let mut parked = VehicleState::new(ix, def, at(v.position), v.heading, terrain)
                 .ok_or_else(|| format!("vehicle {:?} at {:?} has a wheel off the ground", v.character, v.position))?;
+            settlement.arm(&mut parked, def);
             settlement.vehicles.push(parked);
         }
         Ok(settlement)
@@ -878,6 +883,7 @@ impl Settlement {
                 Stage::Site { materials, .. } => materials,
                 Stage::Built => unreachable!("a built building takes no deliveries"),
             },
+            InventoryRef::Gun(v) => &mut self.vehicles[v as usize].gun.as_mut().expect("a crawler with a gun").store,
         }
     }
 
@@ -890,6 +896,7 @@ impl Settlement {
             InventoryRef::Pile(id) => self.piles.as_ref().expect("a pile scene").piles[&id].position,
             InventoryRef::Collector => self.piles.as_ref().and_then(|lab| lab.collector.as_ref()).expect("a collector").position,
             InventoryRef::Output(b) | InventoryRef::Site(b) => self.buildings[b as usize].output_position,
+            InventoryRef::Gun(v) => self.vehicles[v as usize].position,
         }
     }
 
@@ -916,7 +923,9 @@ impl Settlement {
                     };
                     std::iter::once(&b.output).chain(materials)
                 });
-                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).chain(buildings).map(|inventory| inventory.counts[i] as u64).sum();
+                // And crawlers' guns' ammo stores (TU.2 of the turret).
+                let guns = self.vehicles.iter().filter_map(|v| v.gun.as_ref().map(|g| &g.store));
+                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).chain(buildings).chain(guns).map(|inventory| inventory.counts[i] as u64).sum();
                 let carried = self.agents.iter().map(|a| a.carry.inventory.counts[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
@@ -1019,7 +1028,8 @@ impl Settlement {
                 crawler::check_reach(v, c)?;
             }
         }
-        self.validate_seats()
+        self.validate_seats()?;
+        self.validate_guns()
     }
 
     /// Every vehicle seat holds one elder at most, a rider sits on a
@@ -1198,7 +1208,22 @@ impl Settlement {
         // did before it.
         let burns: Vec<_> = self.threats.iter().filter_map(|t| t.burn.map(|b| (t.id, b))).collect();
         if !self.fireballs.is_empty() || !self.fires.is_empty() || !burns.is_empty() {
-            bytes.extend(postcard::to_allocvec(&(&self.fireballs, &self.fires, &burns)).expect("fire encodes"));
+            // A ballista's fireballs as they hashed when only a ballista
+            // threw them, its index where the mount is; a crawler gun's
+            // (TU.2 of the turret) after them, where there are any.
+            let thrown: Vec<_> = self
+                .fireballs
+                .iter()
+                .filter_map(|f| match f.mount {
+                    Mount::Building(b) => Some((f.id, f.agent, b, f.from, f.launch_height, f.to, f.born, f.arrival, f.def)),
+                    Mount::Gun(_) => None,
+                })
+                .collect();
+            bytes.extend(postcard::to_allocvec(&(&thrown, &self.fires, &burns)).expect("fire encodes"));
+            let guns: Vec<_> = self.fireballs.iter().filter(|f| matches!(f.mount, Mount::Gun(_))).collect();
+            if !guns.is_empty() {
+                bytes.extend(postcard::to_allocvec(&guns).expect("gun fireballs encode"));
+            }
         }
         // Chasers' goals only while any threat chases, so scenes whose
         // enemies never chase hash as they did before it.
@@ -1300,6 +1325,8 @@ mod tunnel_lab_tests;
 mod crawler_lab_tests;
 #[cfg(test)]
 mod crawler_feet_tests;
+#[cfg(test)]
+mod turret_tests;
 #[cfg(test)]
 mod town_volume_tests;
 #[cfg(test)]

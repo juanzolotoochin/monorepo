@@ -438,7 +438,7 @@ mod tests {
         let def = &content.rules.characters[ix as usize];
         for degrees in [0, 37, 90, 200, 300] {
             let heading = Fx::from_ratio(degrees * 31_416, 1_800_000);
-            let v = VehicleState { character: ix, position: fx::FxVec2::ZERO, heading, speed: Fx::ZERO, height: Fx::ZERO, fall: Fx::ZERO, wheels: [Fx::ZERO; 4], control: Default::default(), legs: None };
+            let v = VehicleState { character: ix, position: fx::FxVec2::ZERO, heading, speed: Fx::ZERO, height: Fx::ZERO, fall: Fx::ZERO, wheels: [Fx::ZERO; 4], control: Default::default(), legs: None, gun: None };
             let seats = [sim::settlement::Seat::Rider { vehicle: 0, place: 0 }, sim::settlement::Seat::Rider { vehicle: 0, place: 1 }, sim::settlement::Seat::Gunner { vehicle: 0 }];
             for place in seats {
                 let o = sim::settlement::crawler::deck_spot(place).unwrap();

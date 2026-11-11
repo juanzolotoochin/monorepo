@@ -139,11 +139,7 @@ impl BuildingKind {
     /// (B3): the offset, cut to the ballista's range. `None` for a
     /// gatherer, or for no offset at all.
     pub fn reticle(&self, offset: FxVec2) -> Option<FxVec2> {
-        let range = self.defence.as_ref()?.range;
-        if offset == FxVec2::ZERO {
-            return None;
-        }
-        Some(if offset.length() > range { offset.normalize_or_zero() * range } else { offset })
+        reticle(offset, self.defence.as_ref()?.range)
     }
 
     /// What the building's `output` holds at most: a gatherer's possessed
@@ -159,6 +155,40 @@ impl BuildingKind {
             Some(d) => Kinds::Only(d.ammo),
             None => Kinds::OneKind,
         }
+    }
+}
+
+/// A reticle `offset` from a ballista or a crawler's gun (B3, TU.2 of the
+/// crawler turret), cut to `range`; `None` for no offset at all.
+pub(super) fn reticle(offset: FxVec2, range: Fx) -> Option<FxVec2> {
+    if offset == FxVec2::ZERO {
+        return None;
+    }
+    Some(if offset.length() > range { offset.normalize_or_zero() * range } else { offset })
+}
+
+/// A scenario's `defence` section in ticks, its ammo resolved to `ammo`:
+/// a ballista kind's (`kinds`) or a crawler's gun's (`GunDef::defence`,
+/// TU.2 of the crawler turret).
+pub(super) fn defence(d: &scenario::Defence, ammo: ItemIx) -> Defence {
+    Defence {
+        ammo,
+        ammo_cap: d.ammo_cap,
+        range: d.range,
+        period: scenario::ticks(d.period),
+        damage: d.damage,
+        speed: d.projectile_speed,
+        muzzle_height: d.muzzle_height,
+        projectile: d.projectile,
+        fireball: d.fireball.as_ref().map(|f| FireballDef {
+            cooldown: scenario::ticks(f.cooldown),
+            speed: f.speed,
+            damage: f.damage,
+            radius: f.radius,
+            fire_radius: f.fire_radius,
+            fire_ticks: scenario::ticks(f.fire_seconds),
+            burn: BurnDef { damage: f.burn_damage, period: scenario::ticks(f.burn_period), linger: scenario::ticks(f.burn_linger) },
+        }),
     }
 }
 
@@ -349,25 +379,7 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
             health: k.health,
             parts: k.parts.iter().map(|p| p.materials.iter().map(|s| (item(&s.item), s.units)).collect()).collect(),
             light: k.light.as_ref().map(|l| l.range),
-            defence: k.defence.as_ref().map(|d| Defence {
-                ammo: item(&d.ammo),
-                ammo_cap: d.ammo_cap,
-                range: d.range,
-                period: scenario::ticks(d.period),
-                damage: d.damage,
-                speed: d.projectile_speed,
-                muzzle_height: d.muzzle_height,
-                projectile: d.projectile,
-                fireball: d.fireball.as_ref().map(|f| FireballDef {
-                    cooldown: scenario::ticks(f.cooldown),
-                    speed: f.speed,
-                    damage: f.damage,
-                    radius: f.radius,
-                    fire_radius: f.fire_radius,
-                    fire_ticks: scenario::ticks(f.fire_seconds),
-                    burn: BurnDef { damage: f.burn_damage, period: scenario::ticks(f.burn_period), linger: scenario::ticks(f.burn_linger) },
-                }),
-            }),
+            defence: k.defence.as_ref().map(|d| defence(d, item(&d.ammo))),
         })
         .collect()
 }
@@ -686,6 +698,9 @@ pub enum FireRefusal {
     NoAmmo,
     /// It shot less than a period ago: `ticks` more.
     Reloading { ticks: u64 },
+    /// The elder mans no crawler's gun (TU.2 of the turret: a pilot or a
+    /// rider can't fire).
+    NotAtGun,
 }
 
 impl FireRefusal {
@@ -695,6 +710,7 @@ impl FireRefusal {
             FireRefusal::NotInBallista => "Possess a ballista to fire".to_string(),
             FireRefusal::NoAmmo => "No ammo: bring stone".to_string(),
             FireRefusal::Reloading { .. } => "Reloading".to_string(),
+            FireRefusal::NotAtGun => "Man the crawler's gun to fire".to_string(),
         }
     }
 }
@@ -963,14 +979,21 @@ impl Settlement {
     /// the view hears why, and the cooldown doesn't start. In a ballista
     /// with a fireball, its own cooldown over, it throws the fireball at the
     /// reticle instead (B4, `throw_fireball`).
-    pub(super) fn bursts(&mut self, messages: Vec<Burst>, tick: u64) {
+    /// At a crawler's gun the Burst key throws the gun's fireball from its
+    /// mount (TU.2 of the turret, `gun_burst`).
+    pub(super) fn bursts(&mut self, messages: Vec<Burst>, tick: u64, terrain: &Terrain) {
         for Burst { agent } in messages {
             let Some(avatar) = self.agents.get(agent as usize).and_then(|a| a.avatar()) else { continue };
+            if let Some(Seat::Gunner { vehicle }) = avatar.seat {
+                self.gun_burst(agent, vehicle, tick, terrain);
+                continue;
+            }
             match burst_plan(avatar, tick, &self.buildings, &self.building_kinds) {
                 Ok((building, Ability::Fireball { to })) => {
                     let defence = self.building_kind(building).defence.as_ref().expect("a ballista");
                     let (def, height) = (defence.fireball.expect("a fireball"), defence.muzzle_height);
-                    self.throw_fireball(tick, agent, building, to, def, height);
+                    let from = self.buildings[building as usize].position;
+                    self.throw_fireball(tick, agent, super::Mount::Building(building), from, to, def, height);
                 }
                 Ok((building, Ability::Burst { units })) => {
                     let kind = &self.building_kinds[self.buildings[building as usize].kind as usize];
@@ -993,6 +1016,9 @@ impl Settlement {
     /// the view's ready indicator and the control verb.
     pub fn burst_check(&self, agent: usize, tick: u64) -> Result<Ability, BurstRefusal> {
         let Some(avatar) = self.agents.get(agent).and_then(|a| a.avatar()) else { return Err(BurstRefusal::NotPossessing) };
+        if let Some(Seat::Gunner { vehicle }) = avatar.seat {
+            return self.gun_burst_plan(agent as AgentIx, vehicle, tick).map(|plan| Ability::Fireball { to: plan.to });
+        }
         burst_plan(avatar, tick, &self.buildings, &self.building_kinds).map(|(_, ability)| ability)
     }
 
