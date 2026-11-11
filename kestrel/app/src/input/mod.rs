@@ -142,6 +142,11 @@ pub enum Edge {
     /// In a town, while possessing a building: Burst (keyboard R,
     /// controller RT), or in a ballista its fireball (R, controller RB).
     Burst,
+    /// A debug key (keyboard J) where a crawler has a gun, as in the
+    /// Crawler Lab, which has no town job menu: the sprite nearest the
+    /// elder takes the crew job (TU.4 of the crawler turret), or goes idle
+    /// if it has it.
+    CrewJob,
 }
 
 /// Navigation, confirm, back, and the menu buttons, from the seated
@@ -265,7 +270,7 @@ const HISTORY: usize = 240;
 pub struct GamepadSnapshots(pub Vec<GamepadSnapshot>);
 
 /// Keys that drive gameplay: only these take ownership from a controller.
-const GAMEPLAY_KEYS: [KeyCode; 21] = [
+const GAMEPLAY_KEYS: [KeyCode; 22] = [
     KeyCode::KeyW,
     KeyCode::KeyA,
     KeyCode::KeyS,
@@ -287,6 +292,7 @@ const GAMEPLAY_KEYS: [KeyCode; 21] = [
     KeyCode::KeyV,
     KeyCode::ControlLeft,
     KeyCode::KeyG,
+    KeyCode::KeyJ,
 ];
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -747,6 +753,9 @@ impl InputService {
         }
         if keys.just_pressed(KeyCode::KeyG) {
             edges.push(Edge::Board);
+        }
+        if keys.just_pressed(KeyCode::KeyJ) {
+            edges.push(Edge::CrewJob);
         }
         if keys.just_pressed(KeyCode::KeyF) {
             // In a volume scene Ctrl digs a step down and Alt a step up.

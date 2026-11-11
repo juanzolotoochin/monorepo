@@ -956,6 +956,7 @@ impl World {
             settlement.claim_dig_tiles(messages.claim_dig_tile);
             settlement.sprite_bundles(messages.sprite_bundle, tick, &self.terrain);
             settlement.sprite_installs(messages.sprite_install);
+            settlement.crew_guns(messages.crew_gun, &self.terrain);
         }
         self.apply_repairs();
     }

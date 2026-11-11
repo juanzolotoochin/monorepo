@@ -1494,6 +1494,9 @@ fn job_labels(sim: &Simulation, job: Option<&String>) -> (String, String) {
     if job.is_some_and(|id| id == crate::legacy::MINE_JOB) {
         return ("MINER".to_string(), "MINE".to_string());
     }
+    if job.is_some_and(|id| id == crate::legacy::CREW_JOB) {
+        return ("GUNNER".to_string(), "CREW".to_string());
+    }
     let Some(kind) = job.and_then(|id| sim.config().building_kinds.iter().find(|k| k.id == *id)) else {
         return (String::new(), String::new());
     };
@@ -1847,9 +1850,9 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let p = Vec3::new(a.position[0], 0., a.position[1]);
         let p = p + Vec3::Y * volume_feet(world, a).unwrap_or_else(|| ground(world, p));
         let glow = match s.activity {
-            SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling => Glow::Working,
+            SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling | SpriteActivity::Gunning => Glow::Working,
             SpriteActivity::Moving => Glow::Moving,
-            SpriteActivity::Waiting => Glow::Waiting,
+            SpriteActivity::Waiting | SpriteActivity::Riding => Glow::Waiting,
             SpriteActivity::Idle | SpriteActivity::Dead => Glow::Idle,
         };
         // A flame over its head: it dances while working, bobs on the walk,
@@ -1857,9 +1860,9 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // sprite's goes out.
         let phase = index as f32 * 1.7;
         let (size, lift) = match s.activity {
-            SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
+            SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling | SpriteActivity::Gunning => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
             SpriteActivity::Moving => (0.11, 0.04 * (seconds * 6.0 + phase).sin()),
-            SpriteActivity::Waiting => (0.09 + 0.03 * (seconds * 2.0 + phase).sin(), 0.0),
+            SpriteActivity::Waiting | SpriteActivity::Riding => (0.09 + 0.03 * (seconds * 2.0 + phase).sin(), 0.0),
             SpriteActivity::Idle => (0.07, 0.0),
             SpriteActivity::Dead => (0.0, 0.0),
         };
@@ -1877,6 +1880,8 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             SpriteActivity::Moving if s.job.is_none() => "GOING HOME".to_string(),
             SpriteActivity::Moving => "ON THE WAY".to_string(),
             SpriteActivity::Waiting => "WAITING".to_string(),
+            SpriteActivity::Gunning => "AT THE GUN".to_string(),
+            SpriteActivity::Riding => "RIDING".to_string(),
             SpriteActivity::Idle => "IDLE".to_string(),
             SpriteActivity::Dead => format!("BACK IN {back} s"),
         };
@@ -1908,7 +1913,10 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
                 SpriteActivity::Working => "working inside".to_string(),
                 SpriteActivity::Moving => "walking".to_string(),
                 SpriteActivity::Waiting if s.job.as_deref() == Some(crate::legacy::MINE_JOB) => "waiting for stone to dig".to_string(),
+                SpriteActivity::Waiting if s.job.as_deref() == Some(crate::legacy::CREW_JOB) => "waiting for the crawler to stop, or its gun".to_string(),
                 SpriteActivity::Waiting => "waiting for a free building".to_string(),
+                SpriteActivity::Gunning => "manning the crawler's gun".to_string(),
+                SpriteActivity::Riding => "riding the crawler, its gun taken".to_string(),
                 SpriteActivity::Digging => "digging stone".to_string(),
                 SpriteActivity::Hauling => "moving stone".to_string(),
                 SpriteActivity::Idle => "standing at home".to_string(),

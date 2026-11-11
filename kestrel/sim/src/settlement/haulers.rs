@@ -287,6 +287,10 @@ pub(super) struct Ctx<'a> {
     /// The player's avatar as it stood last tick, where and its feet's
     /// height: what the test walker follows (`follow`).
     pub leader: Option<(FxVec2, Fx)>,
+    /// Who mans each vehicle's gun, an elder or a sprite, as of last tick
+    /// (`Settlement::gun_crew`): what a crew sprite's brain reads to tell a
+    /// free gun (TU.4 of the crawler turret).
+    pub crews: &'a [Option<AgentIx>],
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {

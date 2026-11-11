@@ -17,13 +17,13 @@ use super::{AgentIx, Event, Mount, Seat, Settlement, Threat};
 use crate::nav::heading_vector;
 use crate::{Command, CommandKind, Simulation, World};
 
-fn settlement(sim: &Simulation) -> &Settlement {
+pub(super) fn settlement(sim: &Simulation) -> &Settlement {
     sim.world().settlement().unwrap()
 }
 
 /// The lab with the pilot (`agents[0]`) in the cab, its waves and ghouls
 /// gone, so the tests place their own.
-fn lab() -> (Simulation, Vec<u16>) {
+pub(super) fn lab() -> (Simulation, Vec<u16>) {
     let (mut sim, agents) = crawler_lab_with_guests();
     board(&mut sim, &agents, &[0]);
     let s = sim.world_mut().settlement_mut();
@@ -33,13 +33,13 @@ fn lab() -> (Simulation, Vec<u16>) {
 }
 
 /// The lab's first sprite (`sprite_ash`).
-fn ash(sim: &Simulation) -> AgentIx {
+pub(super) fn ash(sim: &Simulation) -> AgentIx {
     settlement(sim).agents.iter().position(|a| a.id == "sprite_ash").unwrap() as AgentIx
 }
 
 /// A ghoul of the lab's waves with `hp`, at `offset` from the parked
 /// crawler's middle, standing still (staggered for good) unless `walks`.
-fn ghoul(sim: &mut Simulation, id: u64, offset: (f64, f64), hp: u32, walks: bool) {
+pub(super) fn ghoul(sim: &mut Simulation, id: u64, offset: (f64, f64), hp: u32, walks: bool) {
     let s = sim.world_mut().settlement_mut();
     let m = |v: f64| Fx::from_ratio((v * 1000.0).round() as i64, 1000);
     let position = s.vehicles[0].position + FxVec2::new(m(offset.0), m(offset.1));
@@ -94,12 +94,12 @@ fn spent(s: &Settlement) -> u64 {
     s.accounts[s.item_index("stone").unwrap() as usize].spent
 }
 
-fn shots(s: &Settlement) -> usize {
+pub(super) fn shots(s: &Settlement) -> usize {
     s.events.iter().filter(|e| matches!(e, Event::GunShot { vehicle: 0 })).count()
 }
 
 /// The pilot holds the stick south.
-fn south(agents: &[u16]) -> Command {
+pub(super) fn south(agents: &[u16]) -> Command {
     Command { player: owner(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Walk { direction: heading_vector(SOUTH), run: false } } }
 }
 
@@ -117,7 +117,7 @@ fn burst(agents: &[u16], i: usize) -> Command {
     Command { player: owner(i), kind: CommandKind::Burst { agent: agents[i] } }
 }
 
-fn fx(v: f64) -> Fx {
+pub(super) fn fx(v: f64) -> Fx {
     Fx::from_ratio((v * 1000.0).round() as i64, 1000)
 }
 

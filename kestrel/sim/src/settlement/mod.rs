@@ -22,6 +22,7 @@ pub mod chase;
 pub mod clock;
 pub mod combat;
 pub mod crawler;
+mod crew;
 pub mod fire;
 pub mod gun;
 mod economy;
@@ -1327,6 +1328,8 @@ mod crawler_lab_tests;
 mod crawler_feet_tests;
 #[cfg(test)]
 mod turret_tests;
+#[cfg(test)]
+mod crew_tests;
 #[cfg(test)]
 mod ammo_tests;
 #[cfg(test)]

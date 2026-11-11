@@ -274,6 +274,7 @@ pub fn dispatch(world: &mut World) {
             Edge::TargetNext => world.resource_mut::<Dispatcher>().targets.cycle(1),
             Edge::Choose(index) => choose(world, index),
             Edge::Board => world.resource_mut::<SessionService>().command(CommandKind::Board { agent }),
+            Edge::CrewJob => crew_job(world, agent),
             Edge::Build if town => {
                 let built = super::town::build(world);
                 town_feedback(world, built);
@@ -393,6 +394,31 @@ fn movement(world: &mut World, gameplay: &super::Gameplay) {
 }
 
 /// Keyboard E with a supply chain: the nearest machine within reach.
+/// The crew debug key (J, `Edge::CrewJob`): where a crawler has a gun, the
+/// live sprite nearest elder `agent` takes the crew job, or goes idle if it
+/// has it, and the notice says which.
+fn crew_job(world: &mut World, agent: u16) {
+    let picked = {
+        let service = world.resource::<SessionService>();
+        let Some(s) = service.settlement() else { return };
+        if !s.vehicles.iter().any(|v| v.gun.is_some()) {
+            return;
+        }
+        let Some(me) = s.agents.get(agent as usize).map(|a| a.body.position) else { return };
+        s.agents
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.body.alive())
+            .filter_map(|(i, a)| Some((i, a, a.sprite()?)))
+            .min_by_key(|(i, a, _)| ((a.body.position - me).length_squared(), *i))
+            .map(|(i, a, sprite)| (i as u16, a.id.to_uppercase(), sprite.job == sim::settlement::SpriteJob::Crew))
+    };
+    let Some((sprite, name, crewing)) = picked else { return };
+    let job = if crewing { sim::settlement::SpriteJob::Idle } else { sim::settlement::SpriteJob::Crew };
+    world.resource_mut::<SessionService>().command(CommandKind::SetSpriteJob { agent: sprite, job });
+    world.resource_mut::<Dispatcher>().notice = format!("{name}: {}", if crewing { "IDLE" } else { "CREW THE CRAWLER" });
+}
+
 fn toggle_nearest_machine(world: &mut World) {
     let Some(p) = world.resource::<SessionService>().player_view_position() else { return };
     let Some(sim) = world.get_resource::<crate::settlement::Settlement>().and_then(|s| s.simulation.as_ref()) else { return };

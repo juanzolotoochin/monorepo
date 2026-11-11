@@ -65,7 +65,7 @@ use super::haulers::{self, Ctx, Walker, RETRY_TICKS};
 use super::miners::{self, Targets, Town};
 use super::piles::PileId;
 use super::{AgentIx, AgentState, Body, BuildingIx, BuildingKindIx, Carry, DepotIx, Direction, InventoryRef, Occupant, Role, Settlement, Slot};
-use crate::messages::{ActionMessages, CarryUnit, ClaimDigTile, ClaimSlot, EnterSlot, Install, Messages, ReserveStock, SpriteBundle, StockChange};
+use crate::messages::{ActionMessages, CarryUnit, ClaimDigTile, ClaimSlot, CrewGun, EnterSlot, Install, Messages, ReserveStock, SpriteBundle, StockChange};
 use crate::terrain::Terrain as Ground;
 use crate::nav::{self, distance};
 use crate::terrain::{Disc, Terrain};
@@ -141,6 +141,14 @@ pub enum SpriteJob {
     /// player through the volume, keeping `follow::KEEP` away, and do
     /// nothing else (`follow`). Appended, as `Mine` was.
     Follow,
+    /// Crew a crawler's gun (TU.4 of the crawler turret, T4): walk to the
+    /// nearest crawler with a gun nobody else mans and climb to the gun
+    /// while it stands still within reach (`Step::Crew`). A walking crawler
+    /// waits for nobody: the sprite waits and plans again. Aboard, it
+    /// shoots on its own; bumped from the gun by an elder (T3) it rides,
+    /// and takes the gun back once it is free. Another job climbs it down
+    /// (`Settlement::crew_housekeeping`). Appended.
+    Crew,
 }
 
 /// One step of a sprite's plan.
@@ -186,6 +194,13 @@ pub enum Step {
     /// Install this site's next part, `part`, its materials all there.
     /// Done once the site moved past it.
     Install { site: BuildingIx, part: u8 },
+    /// A crew sprite's (TU.4 of the crawler turret): beside this crawler,
+    /// climb to its gun. Stage 3 asks while the crawler stands still, the
+    /// sprite is within reach of its box (`interact::beside_gun`) and the
+    /// gun is free; stage 5 seats it (`Settlement::crew_guns`). The crawler
+    /// walking, the gun taken or the sprite out of reach breaks it.
+    /// Appended.
+    Crew(super::VehicleIx),
 }
 
 /// How light stands to a sprite this tick (M8.7, L3): whether it is
@@ -293,6 +308,12 @@ pub struct SpriteState {
     /// (`Settlement::aim_guns`), and nothing can hit it.
     #[serde(default)]
     pub gun: Option<super::VehicleIx>,
+    /// The crawler and rider's place it rides in (TU.4 of the turret, T3,
+    /// format 52): an elder boarding took the gun from it. It stands in the
+    /// place (`seat_housekeeping`), does nothing, and takes the gun back
+    /// once it is free while its job is still `Crew`.
+    #[serde(default)]
+    pub rider: Option<(super::VehicleIx, u8)>,
 }
 
 impl SpriteState {
@@ -356,7 +377,20 @@ impl SpriteState {
     /// gun (TU.2 of the turret). Nothing chases or hits it, and it stands
     /// in nobody's way.
     pub fn sheltered(&self) -> bool {
-        self.inside() || self.gun.is_some()
+        self.inside() || self.aboard().is_some()
+    }
+
+    /// The crawler it is aboard, at the gun or riding (TU.4 of the turret).
+    pub fn aboard(&self) -> Option<super::VehicleIx> {
+        self.gun.or(self.rider.map(|(v, _)| v))
+    }
+
+    /// The crawler its plan climbs aboard, if it plans to (`Step::Crew`).
+    fn crewing(&self) -> Option<super::VehicleIx> {
+        self.plan.iter().find_map(|step| match *step {
+            Step::Crew(v) => Some(v),
+            _ => None,
+        })
     }
 
     /// The building the plan claims, if it claims one.
@@ -407,6 +441,12 @@ impl SpriteState {
                 _ => Progress::Replan,
             },
             Step::GoTo(target) => {
+                // On the way to a crawler's gun: a walking crawler waits for
+                // nobody, and a gun taken is nothing to walk to.
+                if self.crewing().is_some_and(|v| !crew_open(view, town, v)) {
+                    body.route.clear();
+                    return Progress::Replan;
+                }
                 // The claim must hold all the way there.
                 if self.holds != self.claimed().map(Hold::Claimed) || self.dig_claim != self.claimed_tile() {
                     return Progress::Replan;
@@ -589,6 +629,13 @@ impl SpriteState {
                 // It lost the slot.
                 _ => Progress::Replan,
             },
+            // Beside a still crawler with its gun free, stage 3 asks to
+            // climb up; anything else, it plans again.
+            Step::Crew(v) if crew_open(view, town, v) && beside(view, body, self.height, v) => {
+                body.route.clear();
+                Progress::Stay(None)
+            }
+            Step::Crew(_) => Progress::Replan,
         }
     }
 
@@ -632,6 +679,11 @@ impl SpriteState {
         }
         self.plan = match self.job {
             SpriteJob::Mine => miners::plan(self, body, carry, view, town),
+            SpriteJob::Crew => {
+                let mut steps = miners::deliver(carry, view, town);
+                steps.extend(crew_plan(body, self.height, view, town));
+                steps
+            }
             job => {
                 let mut steps = miners::deliver(carry, view, town);
                 steps.extend(plan(job, body, view));
@@ -657,6 +709,51 @@ fn in_reach(body: &Body, view: &View, holder: InventoryRef) -> bool {
         _ => None,
     };
     at.is_some_and(|at| distance(body.position, at) <= DOCK_REACH)
+}
+
+/// Whether crawler `v`'s gun is open to sprite `view.me`: the crawler has
+/// a gun with its store, stands still (`crawler::walking`), and nobody
+/// else mans the gun (`Town::crews`, as of last tick).
+fn crew_open(view: &View, town: &Town, v: super::VehicleIx) -> bool {
+    let Some(vehicle) = view.vehicles.get(v as usize) else { return false };
+    vehicle.gun.is_some() && !super::crawler::walking(vehicle) && town.crews.get(v as usize).copied().flatten().is_none_or(|a| a == view.me)
+}
+
+/// Whether `body`, its feet at `height`, is within reach of crawler `v`'s
+/// box to climb to its gun, as an elder delivering to it is
+/// (`interact::beside_gun`).
+fn beside(view: &View, body: &Body, height: Fx, v: super::VehicleIx) -> bool {
+    super::interact::beside_gun(view.vehicles, view.characters, view.terrain, v, body.position, height, body.base_radius)
+}
+
+/// A crew sprite's plan (TU.4 of the turret): the nearest crawler with a
+/// gun nobody else mans (by its box, the lowest index on a tie). Standing
+/// still: walk to the free spot beside its box nearest the sprite
+/// (`crawler::board_spot`, by the climbing-down rules) unless it is in
+/// reach already, and climb to the gun (`Step::Crew`). Walking, with no
+/// such crawler, or with nowhere to stand: wait, and plan again.
+fn crew_plan(body: &Body, height: Fx, view: &View, town: &Town) -> Vec<Step> {
+    let crawler = |v: &super::VehicleState| view.characters[v.character as usize].crawler.as_ref().filter(|c| c.gun.is_some());
+    let free = |i: usize| town.crews.get(i).copied().flatten().is_none_or(|a| a == view.me);
+    let nearest = view
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter(|&(i, v)| v.gun.is_some() && free(i))
+        .filter_map(|(i, v)| Some((i, v, crawler(v)?)))
+        .min_by_key(|&(i, v, c)| (super::crawler::box_distance_squared(super::crawler::Pose::of(v), c, body.position), i));
+    let Some((i, v, c)) = nearest else { return vec![Step::Wait] };
+    let ix = i as super::VehicleIx;
+    if super::crawler::walking(v) {
+        return vec![Step::Wait];
+    }
+    if beside(view, body, height, ix) {
+        return vec![Step::Crew(ix)];
+    }
+    match super::crawler::board_spot(v, c, body.position, body.base_radius, view.terrain) {
+        Some((spot, _)) => vec![Step::GoTo(spot), Step::Crew(ix)],
+        None => vec![Step::Wait],
+    }
 }
 
 enum Progress {
@@ -755,6 +852,8 @@ pub(super) fn act(body: &mut Body, sprite: &mut SpriteState, action: &Action, vi
                 Some(Step::DigWall { layer, .. }) => Some(crate::volume::height(*layer)),
                 // A site's floor (M8.6): a lantern's in a tunnel.
                 Some(Step::Supply(site) | Step::Install { site, .. }) => view.buildings.get(*site as usize).map(|b| b.height),
+                // A crawler's side (TU.4 of the turret): its body's floor.
+                Some(Step::Crew(v)) => view.vehicles.get(*v as usize).map(|v| v.height),
                 // A stranded miner's way back to light (M8.7): its level.
                 _ if sprite.light.stranded && sprite.retreating() => Some(sprite.height),
                 _ => None,
@@ -789,9 +888,9 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if !a.body.alive() {
         return;
     }
-    // At a crawler's gun it does nothing of its own: housekeeping keeps it
-    // in its place (TU.2 of the turret; the crew job is TU.4's).
-    if a.sprite().is_some_and(|s| s.gun.is_some()) {
+    // Aboard a crawler, at its gun or riding, it does nothing of its own:
+    // housekeeping keeps it in its place (TU.2, TU.4 of the turret).
+    if a.sprite().is_some_and(|s| s.aboard().is_some()) {
         return;
     }
     let def = super::avatar::character_of(ctx.characters, a);
@@ -802,7 +901,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         return;
     }
     let view = View { me, ..ctx.view };
-    let town = Town { claims: ctx.dig_claims, errands: ctx.errands, stone: ctx.stone, amber: ctx.amber, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger) };
+    let town = Town { claims: ctx.dig_claims, errands: ctx.errands, stone: ctx.stone, amber: ctx.amber, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger), crews: ctx.crews };
     if let Some(action) = think(a, &view, &town) {
         // A sprite's actions only move it: nothing for the world.
         let mut out = ActionMessages::default();
@@ -841,7 +940,7 @@ pub(super) fn think(a: &mut AgentState, view: &View, town: &Town) -> Option<Acti
 /// asks for its tile on a `ClaimTile` step, starts its bundle's carry job
 /// at a pile, then moves a unit whenever one is due and it is in reach, as
 /// an elder's bundle does (`read_avatar`).
-pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, s: &Settlement, out: &mut Messages) {
+pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, s: &Settlement, terrain: &Terrain, out: &mut Messages) {
     let Some(sprite) = a.sprite().filter(|_| a.body.alive()) else { return };
     if let Some(job) = &a.carry.job {
         if tick >= job.next_tick && distance(a.body.position, s.position_of(job.other)) <= DOCK_REACH {
@@ -876,6 +975,9 @@ pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, s: &Settlement, out: 
             if reach(InventoryRef::Site(site)) {
                 out.sprite_install.push(Install { agent: me, building: site });
             }
+        }
+        Some(Step::Crew(vehicle)) if s.crew_may_board(me as usize, vehicle, terrain) => {
+            out.crew_gun.push(CrewGun { agent: me, vehicle });
         }
         _ => {}
     }
@@ -991,6 +1093,10 @@ impl Settlement {
         sprite.plan.clear();
         sprite.step = 0;
         sprite.respawn_at = tick + respawn;
+        // Nothing hits a sprite aboard a crawler; were one to die there, it
+        // would leave its place (TU.4 of the turret).
+        sprite.gun = None;
+        sprite.rider = None;
         true
     }
 

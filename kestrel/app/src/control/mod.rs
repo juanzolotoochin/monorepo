@@ -284,11 +284,13 @@ fn send(world: &mut World, kind: CommandKind) {
     world.resource_mut::<SessionService>().command(kind);
 }
 /// The sprite job a command names: a building kind (by id) to staff,
-/// `"mine"` to mine (`legacy::MINE_JOB`), or idle when missing.
+/// `"mine"` to mine (`legacy::MINE_JOB`), `"crew"` to crew a crawler's gun
+/// (`legacy::CREW_JOB`, TU.4 of the crawler turret), or idle when missing.
 fn sprite_job(s: &sim::settlement::Settlement, job: Option<&str>) -> Result<sim::settlement::SpriteJob, String> {
     Ok(match job {
         None => sim::settlement::SpriteJob::Idle,
         Some(crate::legacy::MINE_JOB) => sim::settlement::SpriteJob::Mine,
+        Some(crate::legacy::CREW_JOB) => sim::settlement::SpriteJob::Crew,
         Some(kind) => sim::settlement::SpriteJob::Staff(s.building_kinds.iter().position(|k| k.id == kind).ok_or("unknown building kind")? as u16),
     })
 }

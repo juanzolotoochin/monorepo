@@ -223,6 +223,21 @@ pub struct BuildingFire {
     pub to: FxVec2,
 }
 
+/// A crew sprite beside a still crawler asks to climb to its gun
+/// (`Settlement::crew_guns`, TU.4 of the crawler turret).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrewGun {
+    pub agent: u16,
+    pub vehicle: u16,
+}
+
+impl StateHash for CrewGun {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.vehicle);
+    }
+}
+
 /// A crawler's gun, manned by a sprite, shoots at a threat's current
 /// position (`Settlement::gun_fire`, TU.2 of the crawler turret), as a
 /// ballista building's `BuildingFire`.
@@ -980,4 +995,8 @@ message_queues! {
     // Crawlers' guns' shots by sprites (TU.2 of the turret), after the
     // ballista buildings'. Hashed only when there are any.
     gun_fire: GunFire,
+    // Crew sprites climbing to a crawler's gun (TU.4 of the turret), last
+    // in stage 5, after the elders' boarding. Hashed only when there are
+    // any.
+    crew_gun: CrewGun,
 }

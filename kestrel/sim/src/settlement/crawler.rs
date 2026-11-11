@@ -668,25 +668,8 @@ pub fn walking(v: &VehicleState) -> bool {
 /// foot's spot and the spot each swinging foot lands on. `None` when
 /// every spot is blocked.
 pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, spot: Option<Offset>, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
-    let legs = v.legs.as_ref()?;
-    let pose = Pose::of(v);
     let side = Fx::from_int(if spot.is_some_and(|o| o.across > Fx::ZERO) { 1 } else { -1 });
-    let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
-    let (beside, end) = (half_width + radius + EXIT_GAP, half_length + radius + EXIT_GAP);
-    let along = Fx::from_ratio(3, 2);
-    let offsets = [
-        Offset { along: Fx::ZERO, across: side * beside },
-        Offset { along: -along, across: side * beside },
-        Offset { along, across: side * beside },
-        Offset { along: Fx::ZERO, across: -side * beside },
-        Offset { along: -along, across: -side * beside },
-        Offset { along, across: -side * beside },
-        Offset { along: -end, across: Fx::ZERO },
-        Offset { along: end, across: Fx::ZERO },
-    ];
-    // The highest floor it stands on: a foot down in a trench doesn't
-    // lead its elders down there.
-    let level = (0..4).map(|i| legs.landing(i).1).max()?;
+    let offsets = exit_offsets(c, side, radius);
     // Each seat tries its own spot first, so four climbing down together
     // land apart: the pilot's beside the middle, the riders' beside the
     // back, the gunner's behind.
@@ -696,10 +679,56 @@ pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, spot: Option<Offset>, radius:
         Some(_) => 1,
     };
     let offsets = std::iter::once(offsets[first]).chain(offsets.into_iter().enumerate().filter(|&(i, _)| i != first).map(|(_, o)| o));
+    let clear = exit_check(v, radius, terrain)?;
+    let pose = Pose::of(v);
+    offsets.into_iter().find_map(|o: Offset| clear(pose.at(o)))
+}
+
+/// Where a body of `radius` at `from` walks to climb aboard (a crew
+/// sprite, TU.4 of the turret): of the spots an elder climbs down to
+/// (`exit_spot`'s eight, by the same rules), the free one nearest `from`,
+/// the first in `exit_spot`'s order for the left side on a tie. Every one
+/// is within the boarding reach of the box. `None` when every spot is
+/// blocked.
+pub fn board_spot(v: &VehicleState, c: &CrawlerDef, from: FxVec2, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+    let clear = exit_check(v, radius, terrain)?;
+    let pose = Pose::of(v);
+    exit_offsets(c, Fx::from_int(-1), radius).into_iter().filter_map(|o| clear(pose.at(o))).min_by_key(|&(p, _)| (p - from).length_squared())
+}
+
+/// The eight spots beside a crawler's box a body of `radius` climbs down
+/// to, `side` (1 the right, -1 the left) first: beside the middle, toward
+/// the back and the front; the same on the other side; behind and in
+/// front.
+fn exit_offsets(c: &CrawlerDef, side: Fx, radius: Fx) -> [Offset; 8] {
+    let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
+    let (beside, end) = (half_width + radius + EXIT_GAP, half_length + radius + EXIT_GAP);
+    let along = Fx::from_ratio(3, 2);
+    [
+        Offset { along: Fx::ZERO, across: side * beside },
+        Offset { along: -along, across: side * beside },
+        Offset { along, across: side * beside },
+        Offset { along: Fx::ZERO, across: -side * beside },
+        Offset { along: -along, across: -side * beside },
+        Offset { along, across: -side * beside },
+        Offset { along: -end, across: Fx::ZERO },
+        Offset { along: end, across: Fx::ZERO },
+    ]
+}
+
+/// The check a spot beside crawler `v` passes for a body of `radius` to
+/// stand on it, with its floor: in the arena, clear of discs and rock and
+/// of every foot's spot and each swinging foot's landing, its floor within
+/// `EXIT_LEVEL` of the highest floor the feet stand on. `None` for a
+/// vehicle without legs.
+fn exit_check<'a>(v: &'a VehicleState, radius: Fx, terrain: &'a Terrain) -> Option<impl Fn(FxVec2) -> Option<(FxVec2, Fx)> + 'a> {
+    let legs = v.legs.as_ref()?;
+    // The highest floor it stands on: a foot down in a trench doesn't
+    // lead its elders down there.
+    let level = (0..4).map(|i| legs.landing(i).1).max()?;
     let spots: Vec<FxVec2> = legs.feet.iter().map(|f| f.spot).chain(legs.feet.iter().filter_map(|f| f.swing.as_ref().map(|s| s.to))).collect();
     let clearance = FOOT_RADIUS + radius + EXIT_FOOT_GAP;
-    offsets.into_iter().find_map(|o: Offset| {
-        let p = pose.at(o);
+    Some(move |p: FxVec2| {
         if !terrain.inside(p) || !terrain.clear(p, p, radius) {
             return None;
         }

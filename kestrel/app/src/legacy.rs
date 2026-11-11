@@ -356,6 +356,9 @@ pub struct AgentState {
 pub const MINE_JOB: &str = "mine";
 /// The job the test walker reports (`SpriteJob::Follow`, V.7).
 pub const FOLLOW_JOB: &str = "follow";
+/// The job a crew sprite reports, and the control protocol names for
+/// `SpriteJob::Crew` (TU.4 of the crawler turret).
+pub const CREW_JOB: &str = "crew";
 
 /// What a sprite is doing, as the player reads it (A7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -375,6 +378,10 @@ pub enum SpriteActivity {
     Digging,
     /// A miner moving stone between its bundle and a pile.
     Hauling,
+    /// At a crawler's gun (TU.4 of the crawler turret).
+    Gunning,
+    /// Riding a crawler, its gun taken by an elder.
+    Riding,
 }
 
 /// A sprite's job and what it is doing about it.
@@ -1181,15 +1188,18 @@ impl Simulation {
                     s::SpriteJob::Staff(kind) => Some(current.building_kinds[kind as usize].id.clone()),
                     s::SpriteJob::Mine => Some(MINE_JOB.to_string()),
                     s::SpriteJob::Follow => Some(FOLLOW_JOB.to_string()),
+                    s::SpriteJob::Crew => Some(CREW_JOB.to_string()),
                 };
                 let respawn = current.characters[a.character as usize].sprite.map_or(0, |d| d.respawn);
                 let dead = (!a.body.alive()).then(|| (sprite.respawn_at.saturating_sub(respawn), sprite.respawn_at));
                 let activity = match sprite.current() {
                     _ if dead.is_some() => SpriteActivity::Dead,
                     _ if sprite.inside() => SpriteActivity::Working,
+                    _ if sprite.gun.is_some() => SpriteActivity::Gunning,
+                    _ if sprite.rider.is_some() => SpriteActivity::Riding,
                     Some(s::Step::Wait) => SpriteActivity::Waiting,
                     // Walking, or about to: a claim is granted on the way.
-                    Some(s::Step::GoTo(_) | s::Step::Claim(_) | s::Step::Enter(_) | s::Step::ClaimTile(_)) => SpriteActivity::Moving,
+                    Some(s::Step::GoTo(_) | s::Step::Claim(_) | s::Step::Enter(_) | s::Step::ClaimTile(_) | s::Step::Crew(_)) => SpriteActivity::Moving,
                     Some(s::Step::Dig { .. } | s::Step::DigWall { .. }) => SpriteActivity::Digging,
                     Some(s::Step::Pickup(_) | s::Step::Deposit(_) | s::Step::Fetch { .. } | s::Step::Supply(_) | s::Step::Install { .. }) => SpriteActivity::Hauling,
                     // An idle sprite's plan is done once it is home; a job

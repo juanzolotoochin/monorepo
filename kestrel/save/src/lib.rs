@@ -164,7 +164,12 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     (`Messages::gun_fire`); a holder can be a gun's store
 ///     (`InventoryRef::Gun`, appended, so older input logs decode
 ///     unchanged).
-pub const FORMAT_VERSION: u32 = 51;
+/// 52: a crawler's crew (TU.4 of the crawler turret): a sprite's job can
+///     be `SpriteJob::Crew` and its plan `Step::Crew` (both appended), a
+///     sprite keeps the rider's place it rides in (`SpriteState::rider`),
+///     and the pending messages a queue of crew sprites climbing to a gun
+///     (`Messages::crew_gun`).
+pub const FORMAT_VERSION: u32 = 52;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

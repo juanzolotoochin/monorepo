@@ -7,51 +7,6 @@ The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
 (decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
 branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 
-## TU.4 Crew the crawler
-
-- **Status:** open
-- **Why:** T3, T4.
-- **What to do:** a `SpriteJob` to crew a crawler, set through
-  `SetSpriteJob` like `Staff`: the sprite walks to it, climbs to the gun
-  when it stands still within reach, waits for a walking one; changing
-  the job climbs it down. An elder boarding takes the gun from a sprite,
-  which moves to a free rider place or climbs down. The lab sets the job
-  the way the town does if that's cheap, else from a key.
-- **Where:** `sim/src/settlement/` (sprites), `avatar.rs`, `vehicle.rs`,
-  the app's job controls.
-- **Found in:** crawler turret design.
-- **Tests:** a sprite boards a stopped crawler and shoots; waits for a
-  walking one; climbs down on a job change; an elder bumps it; saves and
-  hashes.
-- **Notes from TU.1:** the lab's sprites are `sprite_ash` and
-  `sprite_fern` by the stone pile, at (-4.6, -3.6) and (-4.6, -5.4), near
-  the south-east waves' path (ghouls turn on them within 3 m). `Seat`
-  lives on `AvatarState`, so a sprite at the gun needs its own link (a
-  sprite field, or a `VehicleState` crew slot); `free_seat` returns the
-  gun only while `gunner_of` is `None`, so an elder bumping a sprite needs
-  it to see the sprite too. `crawler::GUNNER` is where it stands.
-- **Notes from TU.2:** the sprite's link is `SpriteState::gun:
-  Option<VehicleIx>` (format 51); `Settlement::man_gun(agent, vehicle)`
-  seats one directly (drops its slot, errand and plan) and
-  `sprite_gunner_of(vehicle)` finds it. While set, its stage 2 returns at
-  once, housekeeping (`seat_housekeeping`) keeps it at `crawler::GUNNER`
-  at the deck's height (`SpriteState::height`), and `sheltered()` keeps
-  it out of chases, swings, feet and traffic. Nothing clears it yet:
-  `set_sprite_job` doesn't, and climbing down needs an exit spot
-  (`crawler::exit_spot` takes the seat's spot). `free_seat` skips the gun
-  while a sprite mans it; T3's bump replaces that. `validate_guns`
-  refuses a sprite and an elder at one gun.
-- **Notes from TU.3:** `crawler::walking(v)` (speed, a fall, the
-  pilot's stick held, or a foot up) is the "walking crawler" rule the
-  deliveries use; the crew job's "climbs aboard when it stands still"
-  can reuse it, and `interact::beside_gun` (still, within `radius +
-  vehicle::BOARD_REACH` of the box, on its floor) is a ready "in reach"
-  check. Sprites don't deliver stone to the gun (only elders, through
-  interact); a sprite's job loop that restocks it would need its own
-  errand with `InventoryRef::Gun` (its dock check in `sprites.rs` still
-  uses `position_of`, the crawler's middle, with `DOCK_REACH`, which
-  never reaches past the box: use `beside_gun` there).
-
 ## TU.5 The gun in the view
 
 - **Status:** open
@@ -94,6 +49,14 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   has no card; a store readout (HUD line or a card on the crawler, from
   `VehicleState::gun.store`) is TU.5's if cheap. Delivered units fly
   to the crawler's middle (`position_of`), at its height.
+- **Notes from TU.4:** a sprite at the gun (`SpriteState::gun`) or
+  riding (`SpriteState::rider`, a place index into `crawler::RIDERS`) is
+  drawn by the settlement view from its position and feet (the sim puts
+  it at its place at the deck's height), with no seated pose; the view's
+  sprite activity is `gunning` or `riding`. A sprite gunner's aim for
+  the gun's swivel is the same `turret.aim` as an elder's last shot. The
+  app's debug key J (`Edge::CrewJob`) sets the crew job in the lab; a
+  help line for it belongs with "The Crawler Lab's HUD".
 
 ## TU.6 Soak, demos and docs
 
@@ -134,6 +97,18 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   ghouls below it from the plateau or into the trench
   (`combat::below_gun`), so the soak's waves may die to the gun on
   other floors too.
+- **Notes from TU.4:** a demo script sends a sprite to the gun with
+  `{ "op": "settlement_sprite_job", "sprite": "sprite_ash", "job": "crew" }`;
+  from the stone pile it takes a few seconds to walk round to the parked
+  crawler (`crew_tests` allow up to 30 s; the app test reaches it inside
+  1400 frames at 30 fps) and only climbs up while the crawler stands
+  still, so the sprite-gunner demo must board it before the pilot walks
+  off, or stop and wait. With a sprite at the gun, the second elder
+  aboard still takes the gun (the sprite rides in place 0), so a demo
+  with a sprite gunner and guests should board guests first or seat
+  them as riders by order. A soak can set `SpriteJob::Crew` on both lab
+  sprites and toggle it, and should expect the one not at the gun to
+  wait beside the crawler; `validate` checks riding sprites.
 
 ## Collide rovers with bodies
 
@@ -334,7 +309,154 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/sim/src/settlement/vehicle.rs` (`board`).
 - **Found in:** TU.3 of the crawler turret.
 
+## A riding sprite holds its place against elders
+
+- **Status:** open
+- **Why:** a sprite an elder bumped from the gun rides in a rider's place
+  (TU.4, T3) and keeps it: an elder boarding takes only a place no elder
+  or sprite holds, so with a sprite riding, one fewer elder fits on the
+  deck (the fourth elder gets nothing).
+- **What to do:** decide whether an elder boarding a full deck bumps a
+  riding sprite down (by the climbing-down rules), as the gun's bump
+  does, or whether sprites keep their places.
+- **Where:** `kestrel/sim/src/settlement/vehicle.rs` (`free_seat`),
+  `crew.rs`.
+- **Found in:** TU.4 of the crawler turret.
+
+## Sprites restock a crawler's gun
+
+- **Status:** open
+- **Why:** a crew sprite mans the gun but nobody restocks it except an
+  elder carrying stone (TU.3); a sprite gunner shoots the store empty
+  and sits there.
+- **What to do:** a sprite errand that carries the gun's ammo from a
+  depot to a still crawler (`InventoryRef::Gun`, docking with
+  `interact::beside_gun`, not `position_of` and `DOCK_REACH`), for an
+  idle crew sprite (riding or waiting) or a miner.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `miners.rs`.
+- **Found in:** TU.4 of the crawler turret.
+
+## The crew job in the town's job menu
+
+- **Status:** open
+- **Why:** the job menu (`input/town.rs`, `job_menu`) opens only in a
+  town and lists building kinds and mining; the crew job (TU.4) is set
+  in the Crawler Lab by a debug key (J) and the control protocol only.
+- **What to do:** once the lab can interact with sprites (see "Interact
+  in the Crawler Lab"), offer "CREW THE CRAWLER" in the job menu where a
+  crawler has a gun, and retire the J key.
+- **Where:** `kestrel/app/src/input/town.rs`, `input/gameplay.rs`.
+- **Found in:** TU.4 of the crawler turret.
+
 ## Done
+
+## TU.4 Crew the crawler
+
+- **Status:** done (branch `kestrel-crawler-turret`, PR to come with TU.6)
+- **Why:** T3, T4.
+- **What to do:** a `SpriteJob` to crew a crawler, set through
+  `SetSpriteJob` like `Staff`: the sprite walks to it, climbs to the gun
+  when it stands still within reach, waits for a walking one; changing
+  the job climbs it down. An elder boarding takes the gun from a sprite,
+  which moves to a free rider place or climbs down. The lab sets the job
+  the way the town does if that's cheap, else from a key.
+- **Where:** `sim/src/settlement/` (sprites), `avatar.rs`, `vehicle.rs`,
+  the app's job controls.
+- **Found in:** crawler turret design.
+- **Tests:** a sprite boards a stopped crawler and shoots; waits for a
+  walking one; climbs down on a job change; an elder bumps it; saves and
+  hashes.
+- **Notes from TU.1:** the lab's sprites are `sprite_ash` and
+  `sprite_fern` by the stone pile, at (-4.6, -3.6) and (-4.6, -5.4), near
+  the south-east waves' path (ghouls turn on them within 3 m). `Seat`
+  lives on `AvatarState`, so a sprite at the gun needs its own link (a
+  sprite field, or a `VehicleState` crew slot); `free_seat` returns the
+  gun only while `gunner_of` is `None`, so an elder bumping a sprite needs
+  it to see the sprite too. `crawler::GUNNER` is where it stands.
+- **Notes from TU.2:** the sprite's link is `SpriteState::gun:
+  Option<VehicleIx>` (format 51); `Settlement::man_gun(agent, vehicle)`
+  seats one directly (drops its slot, errand and plan) and
+  `sprite_gunner_of(vehicle)` finds it. While set, its stage 2 returns at
+  once, housekeeping (`seat_housekeeping`) keeps it at `crawler::GUNNER`
+  at the deck's height (`SpriteState::height`), and `sheltered()` keeps
+  it out of chases, swings, feet and traffic. Nothing clears it yet:
+  `set_sprite_job` doesn't, and climbing down needs an exit spot
+  (`crawler::exit_spot` takes the seat's spot). `free_seat` skips the gun
+  while a sprite mans it; T3's bump replaces that. `validate_guns`
+  refuses a sprite and an elder at one gun.
+- **Notes from TU.3:** `crawler::walking(v)` (speed, a fall, the
+  pilot's stick held, or a foot up) is the "walking crawler" rule the
+  deliveries use; the crew job's "climbs aboard when it stands still"
+  can reuse it, and `interact::beside_gun` (still, within `radius +
+  vehicle::BOARD_REACH` of the box, on its floor) is a ready "in reach"
+  check. Sprites don't deliver stone to the gun (only elders, through
+  interact); a sprite's job loop that restocks it would need its own
+  errand with `InventoryRef::Gun` (its dock check in `sprites.rs` still
+  uses `position_of`, the crawler's middle, with `DOCK_REACH`, which
+  never reaches past the box: use `beside_gun` there).
+- **Done:** `SpriteJob::Crew` (appended, no argument: the nearest
+  crawler with a gun nobody else mans, as `Staff` names a kind, not a
+  building) through the existing `SetSpriteJob`; `Step::Crew(vehicle)`
+  (appended). The brain (`sprites::crew_plan`) plans `[GoTo(spot),
+  Crew(v)]` while the crawler stands still (`crawler::walking`) and its
+  gun is free (`haulers::Ctx::crews`, who mans each gun as of last tick,
+  `Settlement::gun_crew`), the spot the free one of the eight
+  climbing-down spots nearest the sprite (`crawler::board_spot`; the
+  spots and their checks are now shared with `exit_spot`,
+  `exit_offsets`/`exit_check`), the route to the crawler's floor; already
+  in reach, just `[Crew(v)]`. The crawler walking or the gun taken drops
+  the walk (route cleared) and the plan becomes `[Wait]`, planned again
+  every `RETRY_TICKS`. On the `Crew` step, beside the box
+  (`interact::beside_gun`), stage 3 sends `CrewGun` (a new late queue,
+  `Messages::crew_gun`, hashed only when not empty), and stage 5, last
+  (after the elders' `board` in `apply_actions`, so an elder on the same
+  tick wins), seats the first in agent order (`crew_guns`, through
+  `man_gun`, which now also sets the job to `Crew`, so tests' sprites
+  stay). A sprite rider is `SpriteState::rider: Option<(VehicleIx, u8)>`
+  (save format 52), a place link like `gun`; `aboard()` is either,
+  `sheltered()` covers both, stage 2 returns at once for both, and
+  housekeeping keeps it in its place. T3's bump replaces TU.2's "skip a
+  sprite-manned gun": `free_seat` offers the gun over a sprite if it can
+  go somewhere (`crew::bump`: the lowest free rider's place, else down by
+  the gunner's climbing-down rules), `drive_off` moves it; rider places
+  are free only of elders and sprites (`place_free`), so a riding sprite
+  holds its place against elders. New `sim/src/settlement/crew.rs`:
+  `crew_housekeeping` (in `seat_housekeeping`) climbs down a sprite
+  aboard on any other job (its place's exit spot; its plan cleared, its
+  feet on the spot's floor) and moves a riding crew sprite to the gun
+  once nobody mans it. Death: nothing hits a sprite aboard;
+  `hurt_sprite` clears both links anyway; a crew sprite killed on its
+  way respawns with its job and goes again. `validate_guns` checks
+  riding sprites (alive, no slot, not at a gun too, a crawler's place,
+  alone, no elder there). App: `"crew"` in the control protocol's
+  `settlement_sprite_job` (`legacy::CREW_JOB`), so a demo script sets
+  it; the sprite view reports the job `"crew"` and the activities
+  `"gunning"` (working glow, "AT THE GUN") and `"riding"` (waiting
+  glow); the job labels "GUNNER"/"CREW". The lab has no town job menu
+  (it only opens in towns), so the debug key **J** (`Edge::CrewJob`, any
+  scene with a crawler's gun) toggles the sprite nearest the elder
+  between Crew and Idle and says so in the notice. The view already drew
+  a sprite from its position and feet, so a gunner or rider shows at its
+  place on the deck. Tests (`crew_tests`, 7):
+  `a_crew_sprite_boards_a_stopped_crawler_and_shoots`,
+  `a_crew_sprite_waits_while_the_crawler_walks` (stops on its way, waits
+  and replans while the pilot walks it, boards after it stops),
+  `a_job_change_climbs_it_down` (from the gun and from a rider's place,
+  beside the box; idle, walks home), `an_elder_bumps_a_sprite_to_a_riders_place_or_down`
+  (to place 0, one more elder fits, a fourth doesn't; with the deck full
+  of elders it climbs down and waits), `it_takes_the_gun_back_when_the_elder_leaves`
+  (at once from riding; climbing up again from the ground),
+  `a_fallen_crew_sprite_comes_back_and_boards`,
+  `a_crew_is_saved_hashed_and_predicted` (two crew sprites walking, saved
+  and loaded, one and four threads hash alike over 40 s with an elder
+  bumping and leaving; an elder gunner's replay matches with a sprite
+  riding); `validate` every tick. App: `vehicles::tests::a_scripted_sprite_crews_the_crawler`
+  (the control protocol's `"crew"`, reported `gunning`, drawn feet on
+  the deck). Results: `sim_test` whole (421 passed) and `save_test`
+  pass; the golden file is unchanged, hash and behaviour lines both (no
+  golden scene has a sprite or a vehicle); app `movement_test` filtered
+  to vehicles, crawler, control, sprite, ballista and input (106)
+  passes. Not run: the full suite (TU.6).
 
 ## TU.3 Ammo
 

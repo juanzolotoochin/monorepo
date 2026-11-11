@@ -15,8 +15,8 @@
 //! the tick they go. They go through the ballista's own helpers
 //! (`Settlement::pick_target`, `launch_shot`, `throw_fireball`):
 //!
-//! - A sprite at the gun (`SpriteState::gun`; seated directly by tests
-//!   until TU.4's crew job, `man_gun`) shoots the nearest threat in range
+//! - A sprite at the gun (`SpriteState::gun`; seated by the crew job,
+//!   `crew`, through `man_gun`) shoots the nearest threat in range
 //!   on its own, once a period, as a staffed ballista does (`aim_guns`,
 //!   `gun_fire`).
 //! - An elder at the gun (`Seat::Gunner`) aims instead: its aim is a
@@ -112,20 +112,23 @@ impl Settlement {
     }
 
     /// Puts sprite `agent` at vehicle `vehicle`'s gun, if the gun is there
-    /// and free (no elder or sprite at it): it gives up its slot, its
-    /// errand and its plan, and housekeeping puts it in the gunner's place.
-    /// For tests until TU.4's crew job. Returns whether it did.
+    /// and free (no elder or sprite at it) and the sprite isn't aboard: it
+    /// gives up its slot, its errand and its plan, takes the crew job
+    /// (`SpriteJob::Crew`, so it stays), and housekeeping puts it in the
+    /// gunner's place. The crew job's stage 5 (`crew_guns`) seats sprites
+    /// this way; tests call it directly. Returns whether it did.
     pub fn man_gun(&mut self, agent: AgentIx, vehicle: VehicleIx) -> bool {
         let Some(v) = self.vehicles.get(vehicle as usize) else { return false };
         let armed = gun_of(&self.characters[v.character as usize]).is_some();
         let free = self.gunner_of(vehicle).is_none() && self.sprite_gunner_of(vehicle).is_none();
-        let sprite = self.agents.get(agent as usize).is_some_and(|a| a.body.alive() && a.sprite().is_some_and(|s| s.gun.is_none()));
+        let sprite = self.agents.get(agent as usize).is_some_and(|a| a.body.alive() && a.sprite().is_some_and(|s| s.aboard().is_none()));
         if !armed || !free || !sprite {
             return false;
         }
         self.release_slot(agent);
         self.drop_sprite_errand(agent as usize);
         let AgentState { body, role: Role::Sprite(sprite), .. } = &mut self.agents[agent as usize] else { unreachable!("checked") };
+        sprite.job = super::sprites::SpriteJob::Crew;
         sprite.plan.clear();
         sprite.step = 0;
         sprite.gun = Some(vehicle);
@@ -291,6 +294,23 @@ impl Settlement {
             }
             if !manned.insert(ix) || self.gunner_of(ix).is_some() {
                 return Err(format!("sprite {i} shares vehicle {ix}'s gun"));
+            }
+        }
+        // Riding sprites (TU.4): alive, holding no slot, not at a gun too,
+        // on a crawler in one of its places, alone there.
+        let mut places = std::collections::BTreeSet::new();
+        for (i, a) in self.agents.iter().enumerate() {
+            let Some(sprite) = a.sprite() else { continue };
+            let Some((ix, place)) = sprite.rider else { continue };
+            if sprite.gun.is_some() || !a.body.alive() || sprite.holds.is_some() {
+                return Err(format!("sprite {i} riding vehicle {ix} is at a gun too, dead or holds a slot"));
+            }
+            let crawler = self.vehicles.get(ix as usize).is_some_and(|v| self.characters[v.character as usize].crawler.is_some());
+            if !crawler || place as usize >= super::crawler::RIDERS.len() {
+                return Err(format!("sprite {i} rides vehicle {ix} in place {place}, which it hasn't"));
+            }
+            if !places.insert((ix, place)) || self.rider_of(ix, place).is_some() {
+                return Err(format!("sprite {i} shares vehicle {ix}'s place {place}"));
             }
         }
         Ok(())

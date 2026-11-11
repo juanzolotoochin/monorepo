@@ -502,4 +502,44 @@ mod tests {
         assert!(most > PILOT_PULL - 0.05, "pulled back to {most}");
         assert!(last < 1.05, "eased back in to {last}");
     }
+
+    /// The control protocol's sprite job `"crew"` (TU.4 of the crawler
+    /// turret) sends a lab sprite to the crawler's gun, as a demo script
+    /// does: the view reads it as at the gun and draws it up on the deck.
+    #[test]
+    fn a_scripted_sprite_crews_the_crawler() {
+        let script = serde_json::json!({
+            "version": 1, "scene": "crawler-lab", "fps": 30, "width": 640, "height": 480, "max_frames": 1500,
+            "steps": [
+                { "op": "wait", "frames": 10 },
+                { "op": "settlement_sprite_job", "sprite": "sprite_ash", "job": "crew" },
+                { "op": "wait", "frames": 1400 }
+            ]
+        });
+        let options = crate::control::Options { simulation: true, script: Some(serde_json::from_value(script).unwrap()), ..default() };
+        let library = crate::assets::SceneLibrary::new();
+        let index = library.index("crawler-lab").unwrap();
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(index));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 30.0)));
+        crate::start_world(&mut app);
+        let mut state = serde_json::Value::Null;
+        for _ in 0..1450 {
+            app.update();
+            state = crate::settlement::snapshot(app.world());
+            if state["simulation"]["sprites"]["sprite_ash"]["activity"] == "gunning" {
+                break;
+            }
+        }
+        // A few frames on, past the tick it climbed up on.
+        for _ in 0..5 {
+            app.update();
+        }
+        state = crate::settlement::snapshot(app.world());
+        let ash = &state["simulation"]["sprites"]["sprite_ash"];
+        assert_eq!((ash["job"].as_str(), ash["activity"].as_str()), (Some("crew"), Some("gunning")), "{ash}");
+        // Drawn on the deck, about 3 m up, not on the ground.
+        let feet = state["simulation"]["agents"]["sprite_ash"]["feet"].as_f64().unwrap();
+        assert!(feet > 2.0, "its feet at {feet} m");
+    }
 }

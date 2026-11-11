@@ -369,20 +369,21 @@ impl Settlement {
     /// The free seat of vehicle `ix` for an elder at `from`: the driver's
     /// first, then, on a crawler, the gun's if it has one (T3 of the
     /// turret), then the nearest free rider's place on the deck (the lower
-    /// place on a tie). `None` when every seat is taken.
-    fn free_seat(&self, ix: VehicleIx, from: FxVec2) -> Option<Seat> {
+    /// place on a tie). A sprite at the gun gives it up to an elder
+    /// (TU.4), if it has somewhere to go (`crew::bump`); a sprite riding
+    /// holds its place. `None` when every seat is taken.
+    fn free_seat(&self, ix: VehicleIx, from: FxVec2, terrain: &Terrain) -> Option<Seat> {
         if self.driver_of(ix).is_none() {
             return Some(Seat::Vehicle(ix));
         }
         let v = &self.vehicles[ix as usize];
         let c = self.characters[v.character as usize].crawler.as_ref()?;
-        // A sprite at the gun keeps it until TU.4's crew job lets an elder
-        // take it from them.
-        if c.gun.is_some() && self.gunner_of(ix).is_none() && self.sprite_gunner_of(ix).is_none() {
+        let sprite_moves = || self.sprite_gunner_of(ix).is_none_or(|s| self.bump(ix, s, terrain).is_some());
+        if c.gun.is_some() && self.gunner_of(ix).is_none() && sprite_moves() {
             return Some(Seat::Gunner { vehicle: ix });
         }
         (0..crawler::RIDERS.len() as u8)
-            .filter(|&place| self.rider_of(ix, place).is_none())
+            .filter(|&place| self.place_free(ix, place))
             .min_by_key(|&place| ((Pose::of(v).at(crawler::RIDERS[place as usize]) - from).length_squared(), place))
             .map(|place| Seat::Rider { vehicle: ix, place })
     }
@@ -423,7 +424,7 @@ impl Settlement {
             let (position, radius) = (a.body.position, a.radius());
             let vehicle = (0..self.vehicles.len())
                 .filter(|_| wanted.is_none())
-                .filter_map(|ix| Some((ix, self.free_seat(ix as VehicleIx, position)?)))
+                .filter_map(|ix| Some((ix, self.free_seat(ix as VehicleIx, position, terrain)?)))
                 .map(|(ix, seat)| {
                     let v = &self.vehicles[ix];
                     let def = &self.characters[v.character as usize];
@@ -450,8 +451,8 @@ impl Settlement {
             buildings.sort_by_key(|&(d2, b, _)| (d2, b));
             let building = buildings.iter().find(|(_, _, refusal)| refusal.is_none()).map(|&(d2, b, _)| (d2, b));
             match (vehicle, building) {
-                (Some((dv, (ix, seat))), Some((db, _))) if dv <= db => self.drive_off(agent, ix, seat),
-                (Some((_, (ix, seat))), None) => self.drive_off(agent, ix, seat),
+                (Some((dv, (ix, seat))), Some((db, _))) if dv <= db => self.drive_off(agent, ix, seat, terrain),
+                (Some((_, (ix, seat))), None) => self.drive_off(agent, ix, seat, terrain),
                 (_, Some((_, b))) => self.possess(agent, b, terrain),
                 (None, None) => {
                     let reason = match buildings.first() {
@@ -468,8 +469,13 @@ impl Settlement {
     }
 
     /// Seats `agent` in vehicle `ix`'s `seat`, stopping what it was doing.
-    /// A new driver takes the controls at rest.
-    fn drive_off(&mut self, agent: usize, ix: usize, seat: Seat) {
+    /// A new driver takes the controls at rest. A sprite at the gun an
+    /// elder takes rides or climbs down (T3, `crew::bump`).
+    fn drive_off(&mut self, agent: usize, ix: usize, seat: Seat, terrain: &Terrain) {
+        if let Seat::Gunner { vehicle } = seat {
+            let free = self.bump_sprite_gunner(vehicle, terrain);
+            debug_assert!(free, "`free_seat` checked the sprite can go");
+        }
         let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return };
         avatar.seat = Some(seat);
         sit_down(body, avatar);
@@ -545,13 +551,21 @@ impl Settlement {
                 v.control = Control::default();
             }
         }
+        // A crew sprite climbs down on another job, or takes the gun back
+        // from its rider's place (TU.4 of the turret).
+        self.crew_housekeeping(terrain);
         // A sprite at a crawler's gun (TU.2 of the turret) stands at the
-        // gunner's place, as an elder there does.
+        // gunner's place, as an elder there does, and a riding one in its
+        // place (TU.4).
         for a in &mut self.agents {
             let AgentState { body, role: Role::Sprite(sprite), .. } = a else { continue };
-            let Some(ix) = sprite.gun else { continue };
+            let (ix, place) = match (sprite.gun, sprite.rider) {
+                (Some(ix), _) => (ix, crawler::GUNNER),
+                (None, Some((ix, p))) => (ix, crawler::RIDERS[p as usize]),
+                (None, None) => continue,
+            };
             let v = &self.vehicles[ix as usize];
-            let (position, height) = v.seat_at(&self.characters[v.character as usize], Some(crawler::GUNNER));
+            let (position, height) = v.seat_at(&self.characters[v.character as usize], Some(place));
             body.position = position;
             body.heading = v.heading;
             body.velocity = FxVec2::ZERO;
