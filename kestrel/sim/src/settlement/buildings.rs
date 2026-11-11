@@ -160,7 +160,7 @@ impl BuildingKind {
 
 /// A reticle `offset` from a ballista or a crawler's gun (B3, TU.2 of the
 /// crawler turret), cut to `range`; `None` for no offset at all.
-pub(super) fn reticle(offset: FxVec2, range: Fx) -> Option<FxVec2> {
+pub fn reticle(offset: FxVec2, range: Fx) -> Option<FxVec2> {
     if offset == FxVec2::ZERO {
         return None;
     }

@@ -7,57 +7,6 @@ The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
 (decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
 branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 
-## TU.5 The gun in the view
-
-- **Status:** open
-- **Why:** T1, T5.
-- **What to do:** the gun on the cab's roof in the rig
-  (`actors/crawler.ron`), swivelling to its aim; bolts and the fireball
-  leave from the mount; a gunner sees the reticle and gets the camera
-  pull; a sprite gunner drawn at its seat.
-- **Where:** `app/src/crawler.rs`, `vehicles.rs`, the ballista's view.
-- **Found in:** crawler turret design.
-- **Tests:** the gun turns to its aim; the reticle shows for an elder
-  gunner only; screenshots.
-- **Notes from TU.1:** the mount is (along 1.55, across 0), 1.3 m over
-  the deck: the rig's cab top (z 0.8 to 2.3, 1.3 m up). The gunner stands
-  at `crawler::GUNNER` behind the crates, drawn like a rider
-  (`vehicles::deck_offset`); they already get `PILOT_PULL`. The control
-  protocol's `seat` is `{"vehicle": 0, "gunner": true}` for a gunner.
-- **Notes from TU.2:** bolts (`projectile/N`, `arrow_view`) and the
-  fireball (`fire_glows`) already draw from the sim's projectiles, so
-  they leave the mount: `launch_height` is over the ground there
-  (`arrow_view` reads it as a height over 0 m, the same on the lab's flat
-  ground; the fireball adds the ground). The gun's aim is
-  `VehicleState::gun.turret.aim` (a world point, the last shot's) and an
-  elder gunner's reticle is `AvatarState::aim`, an offset from
-  `gun::mount`. The app doesn't drive a gunner yet: `input/town.rs`'s
-  reticle and fire key run only for a possessed ballista
-  (`Settlement::fire_check`); a gunner needs them with `gun_fire_check`,
-  `gun::range` and the mount as the reticle's origin. Until then a
-  gunner's left button sends the avatar's facing as the offset (a bolt
-  1 m out). `Event::GunShot` maps to the app's `Shot` (the ballista
-  cue).
-- **Notes from TU.3:** the app's highlight (`input/town.rs`) has
-  `InteractTarget::Gun`: a ring of 3.4 m round the crawler's middle and
-  the prompt "LOAD N STONE", or "WAIT: THE CRAWLER IS WALKING" for
-  `Interaction::Walking`; but it only runs in a town (`town::active`:
-  building kinds), which the lab isn't, so in the lab the E key and the
-  highlight don't offer it (see "Interact in the Crawler Lab"); the
-  control protocol's `settlement_interact` does reach it. Nothing shows
-  the store's count yet: the ballista's card has its ammo, the crawler
-  has no card; a store readout (HUD line or a card on the crawler, from
-  `VehicleState::gun.store`) is TU.5's if cheap. Delivered units fly
-  to the crawler's middle (`position_of`), at its height.
-- **Notes from TU.4:** a sprite at the gun (`SpriteState::gun`) or
-  riding (`SpriteState::rider`, a place index into `crawler::RIDERS`) is
-  drawn by the settlement view from its position and feet (the sim puts
-  it at its place at the deck's height), with no seated pose; the view's
-  sprite activity is `gunning` or `riding`. A sprite gunner's aim for
-  the gun's swivel is the same `turret.aim` as an elder's last shot. The
-  app's debug key J (`Edge::CrewJob`) sets the crew job in the lab; a
-  help line for it belongs with "The Crawler Lab's HUD".
-
 ## TU.6 Soak, demos and docs
 
 - **Status:** open
@@ -109,6 +58,19 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   them as riders by order. A soak can set `SpriteJob::Crew` on both lab
   sprites and toggle it, and should expect the one not at the gun to
   wait beside the crawler; `validate` checks riding sprites.
+- **Notes from TU.5:** `//kestrel/app:crawler_turret_demo`
+  (`demos/crawler_turret.json`) has a guest pilot (standing still) and
+  the local elder at the gun firing with `settlement_fire` and
+  `settlement_fireball` (offsets from the mount; space shots 30 frames or
+  more, a refused op fails the demo), then `sprite_ash` crewing. Demo
+  scripts have no guest ops to aim, fire or drive (see "Guest gunners and
+  pilots in demo scripts"), so "a pilot and a guest gunner" needs one,
+  or the local player at the gun with a guest pilot that can drive. The
+  elder's first wave of shots at fixed offsets kills nothing (the
+  ghouls are still out of reach at 4 to 18 s): aim later or follow a threat's
+  position from the trace. The gun is small at the lab's camera
+  distance; the frames read it at 1440 x 960. `lab_line` and `lab_help`
+  are the lab's HUD; the gunner's help line says LMB/R.
 
 ## Collide rovers with bodies
 
@@ -255,16 +217,6 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/app/src/settlement.rs` (`snapshot`).
 - **Found in:** CR.6 of the crawler.
 
-## The Crawler Lab's HUD
-
-- **Status:** open
-- **Why:** the lab shows the settlement's base, wave and pack lines and a
-  stock help line that don't apply to it (CR.1).
-- **What to do:** hide them in scenes without a base, or give the lab its
-  own help line (G boards, run trots).
-- **Where:** `kestrel/app/src/settlement.rs`, `scene.rs`.
-- **Found in:** CR.1 of the crawler.
-
 ## A crawler's gun without its ammo
 
 - **Status:** open
@@ -278,23 +230,6 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/sim/src/settlement/mod.rs` (vehicle setup),
   `content/src/character.rs` (`GunDef`).
 - **Found in:** TU.1 of the crawler turret.
-
-## Interact in the Crawler Lab
-
-- **Status:** open
-- **Why:** the app's interact key and highlight run only in a town
-  (`input/town.rs`, `town::active`: a settlement with building kinds).
-  The Crawler Lab has none, so its E key uses the non-town targets and
-  never offers the crawler's gun (TU.3), though the sim and the control
-  protocol's `settlement_interact` do; a player can't restock the gun
-  by hand in the app, nor withdraw a bundle from the lab's stone pile by
-  the town's interact.
-- **What to do:** let a scene with a crawler's gun (or any settlement
-  scene) use the town's interact, or add `InteractTarget::Gun` to the
-  non-town targets, without bringing the town's HUD into the lab (see
-  "The Crawler Lab's HUD").
-- **Where:** `kestrel/app/src/input/town.rs`, `input/gameplay.rs`.
-- **Found in:** TU.3 of the crawler turret.
 
 ## Boarding a crawler from another floor
 
@@ -345,10 +280,202 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **What to do:** once the lab can interact with sprites (see "Interact
   in the Crawler Lab"), offer "CREW THE CRAWLER" in the job menu where a
   crawler has a gun, and retire the J key.
+- **Notes from TU.5:** the lab interacts with sprites now and the job
+  menu offers "CREW THE CRAWLER" (`SpriteJob::Crew`) wherever a crawler
+  has a gun, in towns too. What's left: retire the J key (kept for now as
+  a shortcut; `style::LAB_HELP` names it), and an app test of the menu's
+  pick.
 - **Where:** `kestrel/app/src/input/town.rs`, `input/gameplay.rs`.
 - **Found in:** TU.4 of the crawler turret.
 
+## Guest gunners and pilots in demo scripts
+
+- **Status:** open
+- **Why:** demo scripts drive guests with `guest_join`, `guest_walk` and
+  `guest_board` only; a guest at the crawler's gun can't aim or fire, and
+  a guest in the cab can't drive. TU.6's demo of "a pilot and a guest
+  gunner" needs one of them.
+- **What to do:** add `guest_drive` (a `MoveAvatar` walk for the guest,
+  as `drive` is for the host) or `guest_fire`/`guest_aim` (an `AimAvatar`
+  and an `Attack` with the offset from the mount, as the host's
+  `settlement_fire`), through `SessionService::command_as`.
+- **Where:** `kestrel/app/src/control/mod.rs`, `control/protocol.rs`.
+- **Found in:** TU.5 of the crawler turret.
+
+## A crawler's bolts leave under its drawn gun
+
+- **Status:** open
+- **Why:** the gun's mount is 1.3 m over the deck (`crawler.gun.height`),
+  the cab roof's top, and bolts and the fireball leave from there; the
+  drawn ballista (TU.5) stands on the roof with its stock about 0.55 m
+  higher, so a bolt starts at the turntable, not the bow.
+- **What to do:** raise `gun.height` to about 1.85 m (the stock's) or
+  draw the gun lower; either way check the `turret_tests` numbers that
+  name 4.3 m.
+- **Where:** `kestrel/content/data/character/crawler.ron`,
+  `app/actors/crawler.ron`.
+- **Found in:** TU.5 of the crawler turret.
+
 ## Done
+
+## TU.5 The gun in the view
+
+- **Status:** done (branch `kestrel-crawler-turret`, PR to come with TU.6)
+- **Why:** T1, T5.
+- **What to do:** the gun on the cab's roof in the rig
+  (`actors/crawler.ron`), swivelling to its aim; bolts and the fireball
+  leave from the mount; a gunner sees the reticle and gets the camera
+  pull; a sprite gunner drawn at its seat.
+- **Where:** `app/src/crawler.rs`, `vehicles.rs`, the ballista's view.
+- **Found in:** crawler turret design.
+- **Tests:** the gun turns to its aim; the reticle shows for an elder
+  gunner only; screenshots.
+- **Notes from TU.1:** the mount is (along 1.55, across 0), 1.3 m over
+  the deck: the rig's cab top (z 0.8 to 2.3, 1.3 m up). The gunner stands
+  at `crawler::GUNNER` behind the crates, drawn like a rider
+  (`vehicles::deck_offset`); they already get `PILOT_PULL`. The control
+  protocol's `seat` is `{"vehicle": 0, "gunner": true}` for a gunner.
+- **Notes from TU.2:** bolts (`projectile/N`, `arrow_view`) and the
+  fireball (`fire_glows`) already draw from the sim's projectiles, so
+  they leave the mount: `launch_height` is over the ground there
+  (`arrow_view` reads it as a height over 0 m, the same on the lab's flat
+  ground; the fireball adds the ground). The gun's aim is
+  `VehicleState::gun.turret.aim` (a world point, the last shot's) and an
+  elder gunner's reticle is `AvatarState::aim`, an offset from
+  `gun::mount`. The app doesn't drive a gunner yet: `input/town.rs`'s
+  reticle and fire key run only for a possessed ballista
+  (`Settlement::fire_check`); a gunner needs them with `gun_fire_check`,
+  `gun::range` and the mount as the reticle's origin. Until then a
+  gunner's left button sends the avatar's facing as the offset (a bolt
+  1 m out). `Event::GunShot` maps to the app's `Shot` (the ballista
+  cue).
+- **Notes from TU.3:** the app's highlight (`input/town.rs`) has
+  `InteractTarget::Gun`: a ring of 3.4 m round the crawler's middle and
+  the prompt "LOAD N STONE", or "WAIT: THE CRAWLER IS WALKING" for
+  `Interaction::Walking`; but it only runs in a town (`town::active`:
+  building kinds), which the lab isn't, so in the lab the E key and the
+  highlight don't offer it (see "Interact in the Crawler Lab"); the
+  control protocol's `settlement_interact` does reach it. Nothing shows
+  the store's count yet: the ballista's card has its ammo, the crawler
+  has no card; a store readout (HUD line or a card on the crawler, from
+  `VehicleState::gun.store`) is TU.5's if cheap. Delivered units fly
+  to the crawler's middle (`position_of`), at its height.
+- **Notes from TU.4:** a sprite at the gun (`SpriteState::gun`) or
+  riding (`SpriteState::rider`, a place index into `crawler::RIDERS`) is
+  drawn by the settlement view from its position and feet (the sim puts
+  it at its place at the deck's height), with no seated pose; the view's
+  sprite activity is `gunning` or `riding`. A sprite gunner's aim for
+  the gun's swivel is the same `turret.aim` as an elder's last shot. The
+  app's debug key J (`Edge::CrewJob`) sets the crew job in the lab; a
+  help line for it belongs with "The Crawler Lab's HUD".
+- **Done:** the gun: the rig (`actors/crawler.ron`) has a `gun` list of
+  pieces in the gun's own frame (origin at the mount, z toward the aim),
+  a brass swivel ballista (turntable, post, yoke, dark stock, winch,
+  shield, bow and a laid bolt) about 0.8 m tall at most and within 0.8 m
+  of the mount; the cab's stack and dome moved to the roof's front
+  corners to clear it. `vehicles::spawn_crawler` hangs it under the body
+  at `crawler::gun_local` (the content's `gun.mount` at `gun.height` over
+  the deck) on a crawler with a `gun`; `draw_crawler` turns it about y
+  to `crawler::gun_yaw` (the aim's bearing from the drawn mount less the
+  body's heading), eased (`ease_yaw`, `GUN_EASE` 9/s, the short way
+  round). The aim (`vehicles::gun_aim`): the local gunner's reticle while
+  they aim, else an elder gunner's confirmed reticle (their
+  `AvatarState::aim`, an offset from the mount, ignored while it is the
+  meter-long facing they boarded with), else `turret.aim` (the last
+  shot's, a sprite's or an elder's); with none it holds its turn (forward
+  at first). Controls (`input/town.rs`): the reticle is the ballista's,
+  generalised: `Reticle::from` is an `Aimer` (`Ballista(b)` or `Gun(v)`),
+  `aiming_from` reads the seat (`Seat::Building` with a defence, or
+  `Seat::Gunner`: center `gun::mount`, range `gun.defence.range`, the
+  ring on the crawler's floor, `v.height`), the cut is the sim's
+  `buildings::reticle` (now `pub`). A gunner's reticle starts half the
+  range ahead of the crawler (as `gun_burst_plan`'s fireball), not at the
+  1 m facing. `fire` checks `gun_fire_check` for a gun (`fire_check` for a
+  ballista), so "No ammo: bring stone" shows over the elder on a press
+  and a reload waits quietly; `fire_at`/`fireball_at` (the control
+  protocol's `settlement_fire`/`settlement_fireball`) work for a gunner
+  too, the offset from the mount. `gameplay::publish_scene` counts a
+  gunner as possessing a ballista, so left mouse and RT fire, R and RB
+  throw the fireball (the sim's `burst_check` already answered for a
+  gunner); the pilot and riders get no reticle. `lockstep`'s mouse attack
+  stands down for any seated elder (before, a gunner's click also sent a
+  facing-offset `Attack`). Bolts and the fireball already drew from the
+  mount (verified in a test and in the frames: the bolt's `from` and
+  `launch_height` are the mount's). The store's count: the lab's HUD line
+  (`settlement::lab_line`) "CRAWLER LAB / GUN 17/20 STONE (ASH) /
+  FIREBALL READY (R) / 3 GHOULS STOPPED, 2 OUT / PACK 0/5", the fireball
+  only while the local elder mans it; the gun's prompt "LOAD 2 STONE (GUN
+  18/20)". Also done: "Interact in the Crawler Lab" and "The Crawler
+  Lab's HUD" (below), and the job menu's "CREW THE CRAWLER" (see "The
+  crew job in the town's job menu"). Demo
+  `//kestrel/app:crawler_turret_demo` (`demos/crawler_turret.json`, 2481
+  frames): a guest in the cab, the elder at the gun aims round and fires
+  11 bolts and the fireball at the first wave (out of reach, no kills),
+  climbs down, and `sprite_ash` crews the gun (gunning from frame 756) and
+  kills three ghouls of the later waves. Frames reviewed; the first
+  render's gun was too low, flat and brass on brass to read, so it grew
+  and got a dark stock. Tests: app `crawler::tests::the_gun_turns_toward_its_aim`,
+  `the_gun_swivels_clear_on_the_cab_roof` (on the roof, clear of the stack,
+  the dome and the places at any turn), `input::tests::an_elder_at_the_crawlers_gun_aims_and_fires_from_the_controller`
+  (no reticle piloting or riding; at the gun the reticle half the range
+  ahead round the mount, the right stick moves it to the 7 m cut, the
+  drawn gun turns to it, RT sends one `Attack` and a bolt leaves the mount
+  at the reticle spending a stone, RB the fireball; gone after climbing
+  down), `e_takes_stone_and_loads_the_crawlers_gun_in_the_lab` (two mouse
+  shots, HUD "GUN 18/20 STONE (YOU)", E at the pile takes a bundle, E
+  beside the crawler prompts "LOAD 2 STONE (GUN 18/20)" and loads it, HUD
+  "GUN 20/20"; B builds nothing), `vehicles::tests::a_scripted_sprite_crews_the_crawler`
+  (no reticle with a sprite gunner; the gun is drawn). Results: app
+  `movement_test` filtered to crawler, vehicles, control, ballista,
+  interact, town, fire, burst, keyboard and possess (70) passes; after
+  the rig's last change, crawler and vehicles (12) pass. The sim's only
+  change is `buildings::reticle`'s visibility; no golden, save or sim
+  test run. Not run: the full suite (TU.6).
+
+## The Crawler Lab's HUD
+
+- **Status:** done (branch `kestrel-crawler-turret`, with TU.5, PR to come with TU.6)
+- **Why:** the lab shows the settlement's base, wave and pack lines and a
+  stock help line that don't apply to it (CR.1).
+- **What to do:** hide them in scenes without a base, or give the lab its
+  own help line (G boards, run trots).
+- **Where:** `kestrel/app/src/settlement.rs`, `scene.rs`.
+- **Found in:** CR.1 of the crawler.
+- **Done:** in a scene with a crawler's gun and no building kinds, the
+  HUD line is the lab's own (`settlement::lab_line`: the gun's store and
+  who mans it, the fireball while the local elder does, ghouls stopped
+  and out, the pack) instead of the base and pack line, and the help line
+  follows the elder's seat (`settlement::lab_help`, `style::LAB_*_HELP`):
+  on foot "G BOARD / E LOAD OR TAKE / Q DROP / J CREW JOB", piloting
+  "WASD WALK / SHIFT TROT / G CLIMB DOWN", at the gun "MOUSE AIM / LMB FIRE
+  / R FIREBALL / G CLIMB DOWN", riding "G CLIMB DOWN", each with Z/C to
+  rotate. Left as it is: the scene shortcut line under it (scenes, F4,
+  "SPACE JETPACK", "WASD STEER"), the same in every scene.
+
+## Interact in the Crawler Lab
+
+- **Status:** done (branch `kestrel-crawler-turret`, with TU.5, PR to come with TU.6)
+- **Why:** the app's interact key and highlight run only in a town
+  (`input/town.rs`, `town::active`: a settlement with building kinds).
+  The Crawler Lab has none, so its E key uses the non-town targets and
+  never offers the crawler's gun (TU.3), though the sim and the control
+  protocol's `settlement_interact` do; a player can't restock the gun
+  by hand in the app, nor withdraw a bundle from the lab's stone pile by
+  the town's interact.
+- **What to do:** let a scene with a crawler's gun (or any settlement
+  scene) use the town's interact, or add `InteractTarget::Gun` to the
+  non-town targets, without bringing the town's HUD into the lab (see
+  "The Crawler Lab's HUD").
+- **Where:** `kestrel/app/src/input/town.rs`, `input/gameplay.rs`.
+- **Found in:** TU.3 of the crawler turret.
+- **Done:** `input::town::active` (the town's interact, one target, the
+  sim's) is now true for a settlement with building kinds or a crawler
+  with a gun, so in the lab E (and controller A) and the highlight reach
+  the gun's store (load by hand), the stone pile (take a bundle, "WITHDRAW
+  5 STONE") and the sprites (the job menu); Q drops a bundle and Z/C turn
+  the view. `town::builds` (kinds only) keeps building to towns: B in the
+  lab says "Nothing to build here". The town's HUD stays out (it reads
+  building kinds directly).
 
 ## TU.4 Crew the crawler
 

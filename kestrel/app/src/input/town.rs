@@ -197,18 +197,27 @@ impl ViewTurn {
     }
 }
 
-/// A possessed ballista's reticle (B3).
+/// What a reticle aims: a possessed ballista (B3), or a crawler's gun the
+/// elder mans (`Seat::Gunner`, TU.5 of the crawler turret).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Aimer {
+    Ballista(u16),
+    Gun(u16),
+}
+
+/// A possessed ballista's reticle (B3), or a crawler gunner's (T5).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reticle {
-    pub building: u16,
-    /// Arena coordinates on the ground: the ballista's center and the
-    /// reticle.
+    pub from: Aimer,
+    /// Arena coordinates: the ballista's center or the gun's mount, and
+    /// the reticle, on the ground (a crawler's: the floor its feet stand
+    /// on, under the mount).
     pub center: Vec3,
     pub point: Vec3,
-    /// The ballista's range in meters.
+    /// The range in meters.
     pub range: f32,
-    /// The reticle as the sim takes it: its offset from the ballista in
-    /// world tiles, within range (`BuildingKind::reticle`).
+    /// The reticle as the sim takes it: its offset from the ballista or
+    /// the mount in world tiles, within range (`buildings::reticle`).
     pub offset: FxVec2,
 }
 
@@ -240,8 +249,17 @@ pub struct Dropped {
     pub expected: u32,
 }
 
-/// Whether the scene is a town: its settlement has building kinds.
+/// Whether the scene uses the town's interact (one target, the sim's): its
+/// settlement has building kinds, or a crawler with a gun (the Crawler Lab,
+/// TU.5 of the crawler turret: E loads the gun, takes from the stone pile
+/// and opens a sprite's job menu). Building needs kinds too ([`builds`]).
 pub fn active(world: &World) -> bool {
+    world.resource::<SessionService>().settlement().is_some_and(|s| !s.building_kinds.is_empty() || s.vehicles.iter().any(|v| v.gun.is_some()))
+}
+
+/// Whether the scene is a town proper: its settlement has building kinds,
+/// so the build key opens a menu.
+pub fn builds(world: &World) -> bool {
     world.resource::<SessionService>().settlement().is_some_and(|s| !s.building_kinds.is_empty())
 }
 
@@ -341,7 +359,12 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
     };
     let prompt = match (target, interaction) {
         // A ballista's ammo store is loaded, not picked up from (B2).
-        (InteractTarget::Output(_) | InteractTarget::Gun(_), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("LOAD {} {}", job.remaining, item(job.item)),
+        // The gun's prompt says what its store holds (TU.5 of the turret).
+        (InteractTarget::Gun(v), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => {
+            let store = s.vehicles.get(v as usize).and_then(|v| v.gun.as_ref()).map_or_else(String::new, |g| format!(" (GUN {}/{})", g.store.total(), g.store.capacity));
+            format!("LOAD {} {}{store}", job.remaining, item(job.item))
+        }
+        (InteractTarget::Output(_), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("LOAD {} {}", job.remaining, item(job.item)),
         (InteractTarget::Output(_) | InteractTarget::Pile(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
         (InteractTarget::Site(_), Interaction::Bundle(job)) => format!("DELIVER {} {}", job.remaining, item(job.item)),
         (_, Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("DEPOSIT {} {}", job.remaining, item(job.item)),
@@ -448,12 +471,13 @@ pub fn burst(world: &mut World) -> Result<Ability, String> {
     Ok(ability)
 }
 
-/// Throws the possessed ballista's fireball at `offset` from it, in
+/// Throws the fireball of the possessed ballista, or of the crawler's gun
+/// the elder mans, at `offset` from it (the ballista or the mount), in
 /// meters, for the control protocol: the reticle goes there (cut to range)
 /// and the Burst key's command follows, if the sim's check lets it now.
 pub fn fireball_at(world: &mut World, offset: Vec2) -> Result<(), String> {
-    let (_, center, _) = possessed_ballista(world).ok_or("Possess a ballista to throw a fireball")?;
-    let point = world.resource::<SessionService>().to_view(center) + Vec3::new(offset.x, 0.0, offset.y);
+    let aiming = aiming_from(world).ok_or("Possess a ballista to throw a fireball")?;
+    let point = world.resource::<SessionService>().to_view(aiming.center) + Vec3::new(offset.x, 0.0, offset.y);
     aim_reticle(world, Some(point), None, 0.0);
     match burst(world)? {
         Ability::Fireball { .. } => Ok(()),
@@ -461,38 +485,83 @@ pub fn fireball_at(world: &mut World, offset: Vec2) -> Result<(), String> {
     }
 }
 
-/// The ballista the local player possesses: its index, center and kind.
-fn possessed_ballista(world: &World) -> Option<(u16, FxVec2, sim::settlement::BuildingKind)> {
+/// What the local player aims from now: a ballista they possess, or a
+/// crawler's gun they man (`Seat::Gunner`), with its center (the
+/// ballista's, or the mount where the confirmed crawler is), the floor its
+/// ring is drawn on, its range and where the reticle starts with no aim.
+struct Aiming {
+    from: Aimer,
+    center: FxVec2,
+    floor: f32,
+    range: Fx,
+    start: FxVec2,
+}
+
+fn aiming_from(world: &World) -> Option<Aiming> {
     let service = world.resource::<SessionService>();
     let (agent, s) = (service.player()?, service.settlement()?);
-    let b = s.seat(agent as usize)?.building()?;
-    let kind = s.building_kind(b);
-    kind.defence.is_some().then(|| (b, s.buildings[b as usize].position, kind.clone()))
+    match s.seat(agent as usize)? {
+        sim::settlement::Seat::Building(b) => {
+            let range = s.building_kind(b).defence.as_ref()?.range;
+            let start = FxVec2::new(Fx::ZERO, Fx::quantize(range.to_f32() * 0.5));
+            Some(Aiming { from: Aimer::Ballista(b), center: s.buildings[b as usize].position, floor: 0.0, range, start })
+        }
+        sim::settlement::Seat::Gunner { vehicle } => {
+            let v = s.vehicles.get(vehicle as usize)?;
+            let (c, gun) = sim::settlement::gun::gun_of(&s.characters[v.character as usize])?;
+            let (center, _) = sim::settlement::gun::mount(v, c, gun);
+            let range = gun.defence.range;
+            // Half the range ahead of the crawler, where the gun's fireball
+            // goes before any aim (`gun_burst_plan`).
+            let start = sim::nav::heading_vector(v.heading) * range.div_int(2);
+            Some(Aiming { from: Aimer::Gun(vehicle), center, floor: v.height.to_f32(), range, start })
+        }
+        _ => None,
+    }
 }
 
-/// Whether the local player possesses a ballista now, for the fire keys.
+/// Whether the local player possesses a ballista now (not a crawler's
+/// gun), for the town's help line.
 pub fn possessing_ballista(world: &World) -> bool {
-    possessed_ballista(world).is_some()
+    aiming_from(world).is_some_and(|a| matches!(a.from, Aimer::Ballista(_)))
 }
 
-/// Moves the reticle while the elder possesses a ballista, and forgets it
-/// otherwise: to the ground under the mouse (`cursor`, arena coordinates),
-/// or by the right stick (`stick`, input space) over `dt` seconds, within
-/// the ballista's range. It starts where the sim has the aim (a facing a
-/// meter out, on boarding). A moved reticle goes to the sim as `AimAvatar`.
+/// Whether the local player mans a crawler's gun now (TU.5 of the
+/// turret): the reticle, the fire key and R's fireball, as at a ballista.
+pub fn manning_gun(world: &World) -> bool {
+    aiming_from(world).is_some_and(|a| matches!(a.from, Aimer::Gun(_)))
+}
+
+/// Whether the local player aims a reticle now, at a possessed ballista or
+/// a crawler's gun, for the fire keys.
+pub fn aiming(world: &World) -> bool {
+    aiming_from(world).is_some()
+}
+
+/// Moves the reticle while the elder possesses a ballista or mans a
+/// crawler's gun, and forgets it otherwise: to the ground under the mouse
+/// (`cursor`, arena coordinates), or by the right stick (`stick`, input
+/// space) over `dt` seconds, within range. It starts where the sim has the
+/// aim (a facing a meter out, on boarding a ballista; at a gun, half the
+/// range ahead of the crawler instead of a facing). A moved reticle goes
+/// to the sim as `AimAvatar`. A gun's reticle is an offset from the mount,
+/// so it moves with the crawler.
 pub fn aim_reticle(world: &mut World, cursor: Option<Vec3>, stick: Option<Vec2>, dt: f32) {
-    let Some((building, center, kind)) = possessed_ballista(world) else {
+    let Some(aiming) = aiming_from(world) else {
         let mut dispatcher = world.resource_mut::<Dispatcher>();
         dispatcher.town.reticle = None;
         dispatcher.town.sent_aim = None;
         return;
     };
+    let Aiming { from, center, floor, range, start: ahead } = aiming;
     let service = world.resource::<SessionService>();
     let Some(agent) = service.player() else { return };
     let confirmed = service.settlement().and_then(|s| s.agents.get(agent as usize)?.avatar()?.aim);
-    let previous = world.resource::<Dispatcher>().town.reticle.as_ref().filter(|r| r.building == building).map(|r| r.offset);
-    let range = kind.defence.as_ref().map_or(0.0, |d| d.range.to_f32());
-    let start = previous.or(confirmed).unwrap_or(FxVec2::new(Fx::ZERO, Fx::quantize(range * 0.5)));
+    // At a gun, a confirmed aim no longer than a meter is the facing it
+    // boarded with, not a reticle.
+    let confirmed = confirmed.filter(|aim| matches!(from, Aimer::Ballista(_)) || aim.length() > Fx::ONE + Fx::from_ratio(1, 100));
+    let previous = world.resource::<Dispatcher>().town.reticle.as_ref().filter(|r| r.from == from).map(|r| r.offset);
+    let start = previous.or(confirmed).unwrap_or(ahead);
     let wanted = match (cursor, stick) {
         (Some(point), _) => service.to_sim(point) - center,
         (None, Some(stick)) => {
@@ -501,10 +570,10 @@ pub fn aim_reticle(world: &mut World, cursor: Option<Vec3>, stick: Option<Vec2>,
         }
         (None, None) => start,
     };
-    let offset = kind.reticle(wanted).unwrap_or(start);
-    let center_view = service.to_view(center);
-    let point = service.to_view(center + offset);
-    let reticle = Reticle { building, center: center_view, point, range, offset };
+    let offset = sim::settlement::buildings::reticle(wanted, range).unwrap_or(start);
+    let center_view = service.to_view(center).with_y(floor);
+    let point = service.to_view(center + offset).with_y(floor);
+    let reticle = Reticle { from, center: center_view, point, range: range.to_f32(), offset };
     let mut dispatcher = world.resource_mut::<Dispatcher>();
     let moved = dispatcher.town.sent_aim.is_none_or(|sent| (sent - offset).length() > Fx::from_ratio(1, 20));
     dispatcher.town.reticle = Some(reticle);
@@ -514,20 +583,31 @@ pub fn aim_reticle(world: &mut World, cursor: Option<Vec3>, stick: Option<Vec2>,
     }
 }
 
-/// The fire key, held or `pressed`, while possessing a ballista: an
-/// `Attack` at the reticle when the sim's own check
-/// (`Settlement::fire_check`) says it would go off, at most one a
-/// confirmed tick, so holding repeats at the ballista's period and extra
-/// presses add nothing. A fresh press on an empty ballista fails with the
-/// sim's words ("No ammo: bring stone"); while it reloads it waits quietly.
-/// Returns whether it sent a shot.
-pub fn fire(world: &mut World, pressed: bool) -> Result<bool, String> {
-    let offset = world.resource::<Dispatcher>().town.reticle.as_ref().map(|r| r.offset).ok_or("Possess a ballista to fire")?;
+/// The sim's check for the fire key: the possessed ballista's
+/// (`fire_check`) or the crawler's gun's (`gun_fire_check`).
+fn fire_check(world: &World, from: Aimer) -> Result<(), FireRefusal> {
     let service = world.resource::<SessionService>();
-    let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+    let (Some(s), Some(sim_world), Some(agent)) = (service.settlement(), service.world(), service.player()) else { return Err(FireRefusal::NotAtGun) };
+    match from {
+        Aimer::Ballista(_) => s.fire_check(agent as usize, sim_world.tick()).map(|_| ()),
+        Aimer::Gun(_) => s.gun_fire_check(agent as usize, sim_world.tick()).map(|_| ()),
+    }
+}
+
+/// The fire key, held or `pressed`, while possessing a ballista or manning
+/// a crawler's gun: an `Attack` at the reticle when the sim's own check
+/// (`Settlement::fire_check`, or `gun_fire_check` at a gun) says it would
+/// go off, at most one a confirmed tick, so holding repeats at the period
+/// and extra presses add nothing. A fresh press on an empty one fails with
+/// the sim's words ("No ammo: bring stone"); while it reloads it waits
+/// quietly. Returns whether it sent a shot.
+pub fn fire(world: &mut World, pressed: bool) -> Result<bool, String> {
+    let (offset, from) = world.resource::<Dispatcher>().town.reticle.as_ref().map(|r| (r.offset, r.from)).ok_or("Possess a ballista to fire")?;
+    let service = world.resource::<SessionService>();
+    let (sim_world, agent) = (service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
     let tick = sim_world.tick();
-    match s.fire_check(agent as usize, tick) {
-        Ok(_) => {}
+    match fire_check(world, from) {
+        Ok(()) => {}
         Err(FireRefusal::Reloading { .. }) => return Ok(false),
         Err(reason) if pressed => return Err(reason.message()),
         Err(_) => return Ok(false),
@@ -541,19 +621,16 @@ pub fn fire(world: &mut World, pressed: bool) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Fires the possessed ballista once at `offset` from it, in meters, for
-/// the control protocol: the reticle goes there (cut to range) and the
-/// shot goes out if the sim's check lets it now, or fails with its words
-/// ("No ammo: bring stone", "Reloading").
+/// Fires the possessed ballista, or the crawler's gun the elder mans, once
+/// at `offset` from it (the ballista or the mount), in meters, for the
+/// control protocol: the reticle goes there (cut to range) and the shot
+/// goes out if the sim's check lets it now, or fails with its words ("No
+/// ammo: bring stone", "Reloading").
 pub fn fire_at(world: &mut World, offset: Vec2) -> Result<(), String> {
-    let (_, center, _) = possessed_ballista(world).ok_or("Possess a ballista to fire")?;
-    let point = world.resource::<SessionService>().to_view(center) + Vec3::new(offset.x, 0.0, offset.y);
+    let aiming = aiming_from(world).ok_or("Possess a ballista to fire")?;
+    let point = world.resource::<SessionService>().to_view(aiming.center) + Vec3::new(offset.x, 0.0, offset.y);
     aim_reticle(world, Some(point), None, 0.0);
-    {
-        let service = world.resource::<SessionService>();
-        let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
-        s.fire_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
-    }
+    fire_check(world, aiming.from).map_err(|r| r.message())?;
     fire(world, true).map(|_| ())
 }
 
@@ -569,7 +646,7 @@ pub fn possessing(world: &World) -> bool {
 /// where the ground holds stone to dig and the tree a pile for it (M6.5).
 fn job_menu(world: &World, sprite: u16) -> JobMenu {
     let service = world.resource::<SessionService>();
-    let s = service.settlement().expect("a town");
+    let s = service.settlement().expect("a settlement");
     let mut options = vec!["IDLE".to_string()];
     let mut jobs = vec![SpriteJob::Idle];
     // A lantern has no slot to work (M8.6).
@@ -585,6 +662,11 @@ fn job_menu(world: &World, sprite: u16) -> JobMenu {
     if stone && s.stone_depot().is_some() {
         options.push("MINE".to_string());
         jobs.push(SpriteJob::Mine);
+    }
+    // Where a crawler has a gun, the crew job (TU.4 of the turret).
+    if s.vehicles.iter().any(|v| v.gun.is_some()) {
+        options.push("CREW THE CRAWLER".to_string());
+        jobs.push(SpriteJob::Crew);
     }
     JobMenu { sprite, options, jobs }
 }
@@ -622,6 +704,9 @@ pub fn build(world: &mut World) -> Result<(), String> {
 /// Why nothing can be built now: the elder possesses a building, so a
 /// ghost in front of it would mean nothing.
 fn build_refusal(world: &World) -> Result<(), String> {
+    if !builds(world) {
+        return Err("Nothing to build here".into());
+    }
     if possessing(world) {
         return Err(LEAVE_FIRST.into());
     }

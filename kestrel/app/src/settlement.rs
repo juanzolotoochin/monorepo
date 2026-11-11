@@ -1109,6 +1109,7 @@ pub fn tick(world: &mut World) {
         town_canopy(world, &mut state, sim, pos);
         town_help(world);
     }
+    lab_help(world);
     for d in &sim.config().depots {
         inventory(
             &mut desired,
@@ -1269,6 +1270,8 @@ pub fn tick(world: &mut World) {
                 cargo,
                 burst
             )
+        } else if let Some(line) = lab_line(world, sim.metrics.kills as u32, (mine.map_or(0, |a| a.cargo.total()), mine.map_or(0, |a| a.cargo.capacity)), &cargo) {
+            line
         } else if !sim.config().weapons.is_empty() {
             format!(
                 "{:?}  /  {} SLAIN  /  {} MELEE HITS  /  {} APPROACHING",
@@ -2037,10 +2040,18 @@ fn hide_possessing(world: &mut World) {
 /// seconds left ("BURST 12 s"); in a ballista, its fireball
 /// ("FIREBALL READY (R)", "FIREBALL 12 s"). For its card and the HUD line.
 fn burst_indicator(world: &World) -> Option<(usize, String)> {
+    let service = world.get_resource::<crate::lockstep::SessionService>()?;
+    let building = service.settlement()?.seat(service.player()? as usize)?.building()?;
+    Some((building as usize, burst_text(world)?))
+}
+
+/// What the local elder's Burst key does now, by the sim's own check
+/// (`Settlement::burst_check`): in a building or at a crawler's gun (TU.5
+/// of the turret), "FIREBALL READY (R)" or "FIREBALL 12 s".
+fn burst_text(world: &World) -> Option<String> {
     use sim::settlement::{Ability, BurstRefusal};
     let service = world.get_resource::<crate::lockstep::SessionService>()?;
     let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
-    let building = s.seat(agent)?.building()?;
     let pad = world.get_resource::<crate::input::InputService>().is_some_and(|i| i.frame().owner == crate::input::Device::Gamepad);
     let seconds = |ticks: u64| ticks.div_ceil(content::TICKS_PER_SECOND as u64);
     let text = match s.burst_check(agent, sim_world.tick()) {
@@ -2051,7 +2062,56 @@ fn burst_indicator(world: &World) -> Option<(usize, String)> {
         Err(BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
         Err(BurstRefusal::NotPossessing | BurstRefusal::NoBurst) => return None,
     };
-    Some((building as usize, text))
+    Some(text)
+}
+
+/// The Crawler Lab's HUD line (TU.5 of the crawler turret), in a scene
+/// with a crawler's gun and no building kinds, instead of the stock
+/// settlement's base and pack: the gun's store ("GUN 17/20 STONE"), who
+/// mans it, the ghouls stopped and out, the elder's bundle, and at the gun
+/// the fireball's cooldown.
+fn lab_line(world: &World, kills: u32, carried: (u32, u32), cargo: &str) -> Option<String> {
+    let service = world.get_resource::<crate::lockstep::SessionService>()?;
+    let s = service.settlement()?;
+    if !s.building_kinds.is_empty() {
+        return None;
+    }
+    let (ix, v) = s.vehicles.iter().enumerate().find(|(_, v)| v.gun.is_some())?;
+    let g = v.gun.as_ref()?;
+    let ammo = sim::settlement::gun::gun_of(&s.characters[v.character as usize]).map_or_else(String::new, |(_, gun)| gun.defence.ammo.to_uppercase());
+    let me = service.player().map(usize::from);
+    let crew = match (s.gunner_of(ix as u16), s.sprite_gunner_of(ix as u16)) {
+        (Some(a), _) if Some(a) == me => " (YOU)".to_string(),
+        (Some(a), _) | (None, Some(a)) => format!(" ({})", s.agents[a].id.trim_start_matches("sprite_").to_uppercase()),
+        (None, None) => String::new(),
+    };
+    let fireball = s.seat(me?).filter(|seat| matches!(seat, sim::settlement::Seat::Gunner { .. })).and_then(|_| burst_text(world)).map_or_else(String::new, |t| format!("  /  {t}"));
+    let out = s.threats.len();
+    let cargo = if cargo.is_empty() { String::new() } else { format!(" {cargo}") };
+    Some(format!("CRAWLER LAB  /  GUN {}/{} {ammo}{crew}{fireball}  /  {kills} GHOULS STOPPED, {out} OUT  /  PACK {}/{}{cargo}   [P] pause", g.store.total(), g.store.capacity, carried.0, carried.1))
+}
+
+/// The Crawler Lab's controls help line (TU.5 of the crawler turret): on
+/// foot, piloting, at the gun or riding, the keys that work there.
+fn lab_help(world: &mut World) {
+    let help = {
+        let Some(service) = world.get_resource::<crate::lockstep::SessionService>() else { return };
+        let Some(s) = service.settlement() else { return };
+        if !s.building_kinds.is_empty() || !s.vehicles.iter().any(|v| v.gun.is_some()) {
+            return;
+        }
+        match service.player().and_then(|a| s.seat(a as usize)) {
+            Some(sim::settlement::Seat::Vehicle(_)) => crate::style::LAB_PILOT_HELP,
+            Some(sim::settlement::Seat::Gunner { .. }) => crate::style::LAB_GUNNER_HELP,
+            Some(_) => crate::style::LAB_RIDER_HELP,
+            None => crate::style::LAB_HELP,
+        }
+    };
+    for mut text in world.query_filtered::<&mut Text, With<crate::scene::ControlHelp>>().iter_mut(world) {
+        if text.0 != help {
+            text.0 = help.into();
+        }
+    }
 }
 
 /// While the local elder possesses a building and its slot is the

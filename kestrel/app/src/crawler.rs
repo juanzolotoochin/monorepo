@@ -10,6 +10,12 @@
 //! bending up and outward over the hip line. A swinging foot follows an arc
 //! that rises first, crosses at the gait's `lift` over the higher floor and
 //! comes down last, so it clears the step it climbs.
+//!
+//! The gun (TU.5 of the crawler turret, `kestrel/CRAWLER_TURRET.md` T1):
+//! the rig's `gun` pieces stand at the gun's mount on the cab's roof (the
+//! content's `crawler.gun`, where bolts leave from) and turn about it to
+//! the gun's aim ([`gun_yaw`]), eased ([`ease_yaw`]): an elder gunner's
+//! reticle, else the last shot's aim, else where it last pointed.
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim::settlement::crawler::{Foot, Legs};
@@ -22,6 +28,10 @@ pub struct Rig {
     /// In the body's frame: the origin on the deck's middle, x right, y up,
     /// z forward.
     pub body: Vec<Piece>,
+    /// The gun's pieces, in its own frame: the origin at the gun's mount,
+    /// y up, z toward its aim. Drawn only on a crawler with a `gun`.
+    #[serde(default)]
+    pub gun: Vec<Piece>,
     pub leg: LegRig,
 }
 
@@ -119,7 +129,7 @@ fn parse(text: &str) -> Result<Rig, String> {
     let rig: Rig = ron::from_str(text).map_err(|e| e.to_string())?;
     let leg = &rig.leg;
     let finite = |v: &[f32; 3], most: f32| v.iter().all(|x| x.is_finite() && x.abs() <= most);
-    let pieces = rig.body.iter().chain(&leg.hip).chain([&leg.thigh, &leg.shin, &leg.foot].into_iter().flat_map(|s| &s.pieces));
+    let pieces = rig.body.iter().chain(&rig.gun).chain(&leg.hip).chain([&leg.thigh, &leg.shin, &leg.foot].into_iter().flat_map(|s| &s.pieces));
     for piece in pieces {
         if !finite(&piece.at, 8.0) || !finite(&piece.size, 8.0) || piece.size.iter().any(|s| *s <= 0.0) || !finite(&piece.turn, 360.0) {
             return Err(format!("invalid piece {piece:?}"));
@@ -237,6 +247,36 @@ pub fn foot_point(foot: &Foot, legs: &Legs, c: &content::character::CrawlerDef, 
     }
 }
 
+/// The gun's mount in the body's frame (on the deck's middle, x right, y
+/// up, z forward): `gun.mount` at `gun.height` over the deck.
+pub fn gun_local(gun: &content::character::GunDef) -> Vec3 {
+    Vec3::new(gun.mount.across.to_f32(), gun.height.to_f32(), gun.mount.along.to_f32())
+}
+
+/// The gun's turn about its mount, radians from the body's forward toward
+/// its right as `Quat::from_rotation_y` takes it, to point at `aim` (view
+/// coordinates) from `mount` on a body facing `heading`; `None` for an aim
+/// on the mount itself.
+pub fn gun_yaw(heading: f32, mount: Vec3, aim: Vec3) -> Option<f32> {
+    let d = (aim - mount).with_y(0.0);
+    (d.length() > 1e-3).then(|| wrap(d.x.atan2(d.z) - heading))
+}
+
+/// How quickly the gun swivels to its aim: the gap closes by this share
+/// a second's e-fold (`ease_yaw`).
+pub const GUN_EASE: f32 = 9.0;
+
+/// The gun's turn after `dt` seconds more toward `target`, the short way
+/// round, easing in.
+pub fn ease_yaw(yaw: f32, target: f32, dt: f32) -> f32 {
+    wrap(yaw + wrap(target - yaw) * (1.0 - (-GUN_EASE * dt.max(0.0)).exp()))
+}
+
+/// An angle within -pi to pi.
+fn wrap(a: f32) -> f32 {
+    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
 /// A leg's hip in the body's frame (on the deck, the origin under the deck's
 /// middle on the ground) and the horizontal outward on its side, for leg
 /// `leg` in `VehicleState::wheels` order (front left, front right, rear
@@ -281,6 +321,63 @@ mod tests {
         let bad = include_str!("../actors/crawler.ron").replacen("size: (2.2, 1.0, 5.3)", "size: (2.2, 0, 5.3)", 1);
         assert!(parse(&bad).unwrap_err().contains("invalid piece"));
         assert!(parse("(body: [], leg: ())").is_err());
+    }
+
+    /// The gun (TU.5 of the turret) stands on the cab's roof at the mount,
+    /// and at any turn it swivels clear of what stands up from the roof
+    /// (the stack and the dome) and of the riders' places.
+    #[test]
+    fn the_gun_swivels_clear_on_the_cab_roof() {
+        let c = crawler();
+        let gun = c.gun.as_ref().expect("the crawler's gun");
+        let mount = gun_local(gun);
+        let rig = builtin();
+        assert!(!rig.gun.is_empty());
+        // Over the cab's roof, on its top.
+        let roof = rig.body.iter().filter(|p| p.material == Finish::Brass && (p.at[2] - mount.z).abs() < 0.01 && p.at[0] == 0.0).map(|p| p.at[1] + p.size[1] / 2.0).fold(f32::MIN, f32::max);
+        assert!((roof - mount.y).abs() < 0.05, "the mount at {} on the roof at {roof}", mount.y);
+        let lowest = rig.gun.iter().map(|p| p.at[1] - p.size[1] / 2.0).fold(f32::MAX, f32::min);
+        assert!(mount.y + lowest >= roof - 0.03, "the gun sits on the roof, not in it");
+        // How far out from the mount any of it reaches, turned any way.
+        let reach = rig.gun.iter().map(|p| {
+            let t = p.transform();
+            let half = Vec3::from_array(p.size) / 2.0;
+            let corners = (0..8).map(|i| t.translation + t.rotation * (half * Vec3::new([-1.0, 1.0][i & 1], [-1.0, 1.0][(i >> 1) & 1], [-1.0, 1.0][i >> 2])));
+            corners.map(|q| q.with_y(0.0).length()).fold(0.0f32, f32::max)
+        }).fold(0.0f32, f32::max);
+        assert!(reach < 0.8, "the gun reaches {reach} m");
+        for piece in rig.body.iter().filter(|p| p.at[1] + p.size[1] / 2.0 > mount.y + 0.05) {
+            let off = Vec2::new(piece.at[0] - mount.x, piece.at[2] - mount.z).length() - piece.size[0].max(piece.size[2]) / 2.0;
+            assert!(off > reach, "{piece:?} {off} m from the mount, in the gun's way ({reach})");
+        }
+        for o in sim::settlement::crawler::RIDERS.iter().chain([&sim::settlement::crawler::GUNNER]) {
+            assert!(Vec2::new(o.across.to_f32() - mount.x, o.along.to_f32() - mount.z).length() > reach + 0.3, "a place under the gun");
+        }
+    }
+
+    /// The gun turns to its aim the short way round, eased, and holds it.
+    #[test]
+    fn the_gun_turns_toward_its_aim() {
+        let mount = Vec3::new(1.0, 4.3, 2.0);
+        // Facing +z, an aim to its right (+x) is a quarter turn.
+        let right = gun_yaw(0.0, mount, mount + Vec3::new(3.0, -4.0, 0.0)).unwrap();
+        assert!((right - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "{right}");
+        // The body turned a quarter right: the same aim is straight ahead.
+        assert!(gun_yaw(std::f32::consts::FRAC_PI_2, mount, mount + Vec3::X * 3.0).unwrap().abs() < 1e-4);
+        assert_eq!(gun_yaw(0.0, mount, mount + Vec3::Y), None);
+        // Easing: never past the aim, closer each frame, there in a second.
+        let (mut yaw, target, dt) = (0.0f32, 2.5f32, 1.0 / 30.0);
+        let first = ease_yaw(yaw, target, dt);
+        assert!(first > 0.0 && first < 0.5 * target, "eased, not snapped: {first}");
+        for _ in 0..30 {
+            let next = ease_yaw(yaw, target, dt);
+            assert!(next >= yaw && next <= target + 1e-5);
+            yaw = next;
+        }
+        assert!((yaw - target).abs() < 0.01, "there: {yaw}");
+        // The short way round: from just left of behind to just right.
+        let near_back = ease_yaw(3.0, -3.0, dt);
+        assert!(near_back > 3.0 || near_back < -3.0, "across the back, not the front: {near_back}");
     }
 
     /// The riders' places on the deck (`crawler::RIDERS`, CR.4) and the

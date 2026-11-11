@@ -142,8 +142,11 @@ fn publish_scene(world: &mut World) {
         utility.push(Utility::CancelLogistics);
     }
     let placing = world.get_resource::<Dispatcher>().is_some_and(|d| d.town.placing.is_some());
-    let possessing = town && super::town::possessing(world);
-    let ballista = possessing && super::town::possessing_ballista(world);
+    // A crawler's gunner (TU.5 of the turret) fires and throws the
+    // fireball as an elder in a ballista does.
+    let gunner = town && super::town::manning_gun(world);
+    let possessing = town && (super::town::possessing(world) || gunner);
+    let ballista = possessing && super::town::aiming(world);
     let mut input = world.resource_mut::<InputService>();
     input.set_scene(SceneContext { scenario, town, utility, recording });
     input.set_placing(placing);
@@ -213,8 +216,9 @@ pub fn dispatch(world: &mut World) {
     }
     let pad = frame.owner == Device::Gamepad;
     // A possessed ballista's reticle takes the aim (`town::aim_reticle`):
-    // the mouse's ground point, or the right stick moving it.
-    let ballista = town && super::town::possessing_ballista(world);
+    // the mouse's ground point, or the right stick moving it. So does a
+    // crawler's gun the elder mans (TU.5 of the turret).
+    let ballista = town && super::town::aiming(world);
     if ballista {
         let cursor = if pad { None } else { cursor_ground(world) };
         let dt = world.resource::<Time>().delta_secs();

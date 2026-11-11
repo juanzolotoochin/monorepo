@@ -270,6 +270,21 @@ filegroup(
     output_group = "video",
 )
 
+# The crawler's gun in the view (TU.5 of the crawler turret): an elder at
+# the gun aims, fires and throws the fireball, then a sprite crews it.
+game_demo(
+    name = "crawler_turret_demo",
+    game = ":demo",
+    script = "demos/crawler_turret.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "crawler_turret_demo_video",
+    srcs = [":crawler_turret_demo"],
+    output_group = "video",
+)
+
 game_demo(
     name = "surprise_demo",
     game = ":demo",
