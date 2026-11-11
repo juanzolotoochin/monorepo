@@ -260,7 +260,7 @@ mod tests {
     fn crawler() -> CrawlerDef {
         let content = crate::lockstep::builtin_content();
         let ix = content.names.character_index("crawler").unwrap();
-        content.rules.characters[ix as usize].crawler.unwrap()
+        content.rules.characters[ix as usize].crawler.clone().unwrap()
     }
 
     #[test]
@@ -283,14 +283,16 @@ mod tests {
         assert!(parse("(body: [], leg: ())").is_err());
     }
 
-    /// The riders' places on the deck (`crawler::RIDERS`, CR.4) are clear:
-    /// no piece standing on the deck within an elder's body of one, and
-    /// each place on the deck, off the cab and the pilot's helm.
+    /// The riders' places on the deck (`crawler::RIDERS`, CR.4) and the
+    /// gunner's (`crawler::GUNNER`, TU.1 of the turret) are clear: no
+    /// piece standing on the deck within an elder's body of one, and each
+    /// place on the deck, off the cab and the pilot's helm.
     #[test]
     fn the_rig_keeps_the_riders_places_clear() {
         let c = crawler();
         let body = 0.3;
-        for (i, o) in sim::settlement::crawler::RIDERS.iter().enumerate() {
+        let places = sim::settlement::crawler::RIDERS.iter().chain([&sim::settlement::crawler::GUNNER]);
+        for (i, o) in places.enumerate() {
             let (x, z) = (o.across.to_f32(), o.along.to_f32());
             assert!(x.abs() < c.width.to_f32() / 2.0 - body && z.abs() < c.length.to_f32() / 2.0 - body, "rider {i} on the deck");
             assert!(z < -0.3, "rider {i} behind the pilot and the helm");

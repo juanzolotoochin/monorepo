@@ -294,7 +294,7 @@ fn rules_hash(names: &Names, rules: &Rules) -> u64 {
     if vehicles.iter().any(Option::is_some) {
         bytes.extend(postcard::to_allocvec(&vehicles).expect("encode vehicles"));
     }
-    let crawlers: Vec<_> = rules.characters.iter().map(|c| c.crawler).collect();
+    let crawlers: Vec<_> = rules.characters.iter().map(|c| c.crawler.as_ref()).collect();
     if crawlers.iter().any(Option::is_some) {
         bytes.extend(postcard::to_allocvec(&crawlers).expect("encode crawlers"));
     }
@@ -625,7 +625,7 @@ mod tests {
         let builtin = Content::builtin();
         let def = &builtin.rules.characters[builtin.names.character_index("crawler").expect("the crawler") as usize];
         assert_eq!(def.brain, character::Brain::Vehicle);
-        let crawler = def.crawler.expect("a crawler section");
+        let crawler = def.crawler.clone().expect("a crawler section");
         assert_eq!((crawler.length, crawler.width, crawler.deck), (Fx::from_int(6), Fx::from_int(3), Fx::from_int(3)));
         assert_eq!((crawler.reach, crawler.step, crawler.gap), (Fx::from_ratio(9, 2), Fx::from_ratio(3, 2), Fx::from_int(2)));
         assert_eq!((crawler.walk.cycle, crawler.walk.swing), (ticks_from_60hz(144), ticks_from_60hz(33)));
@@ -635,6 +635,17 @@ mod tests {
         assert_eq!((vehicle.climb, vehicle.seat), (crawler.step, crawler.deck));
         let rover = builtin.names.character_index("rover").unwrap();
         assert!(builtin.rules.characters[rover as usize].crawler.is_none(), "the rover rolls");
+        // Its gun (CRAWLER_TURRET.md, T1, T7): on the cab's roof, about
+        // 4 m over its feet, and the ballista's numbers but for its store
+        // and range.
+        let gun = crawler.gun.as_ref().expect("a gun");
+        assert_eq!((gun.mount.along, gun.mount.across, gun.height), ("1.55".parse().unwrap(), Fx::ZERO, "1.3".parse().unwrap()));
+        assert!(crawler.deck + gun.height >= Fx::from_int(4));
+        let d = &gun.defence;
+        assert_eq!((d.ammo.as_str(), d.ammo_cap, d.range, d.period, d.damage), ("stone", 20, Fx::from_int(7), Fx::from_ratio(7, 10), 1));
+        let tree = scenario::Scenario::parse(include_str!("../../app/assets/levels/sacred_tree_supply.ron")).unwrap();
+        let ballista = tree.building_kinds.iter().find(|k| k.id == "ballista").and_then(|k| k.defence.clone()).expect("the ballista shoots");
+        assert_eq!((d.period, d.damage, d.projectile_speed, d.projectile, &d.fireball), (ballista.period, ballista.damage, ballista.projectile_speed, ballista.projectile, &ballista.fireball));
     }
 
     #[test]
@@ -655,6 +666,12 @@ mod tests {
         assert!(edit("swing: 33", "swing: 37").contains("crawler.walk"), "four swings fit in a walk's cycle");
         assert!(edit("swing: 27", "swing: 31").contains("crawler.trot"), "two in a trot's");
         assert!(edit("swing: 33, lift: 0.9", "swing: 33, lift: 5.0").contains("walk.lift"));
+        // Its gun is over the body and shoots sensibly.
+        assert!(edit("mount: (along: 1.55", "mount: (along: 3.55").contains("crawler.gun.mount"));
+        assert!(edit("height: 1.3", "height: 7.0").contains("gun.height"));
+        assert!(edit("range: 7.0", "range: 70.0").contains("crawler.gun.defence"));
+        assert!(edit("ammo_cap: 20", "ammo_cap: 0").contains("crawler.gun.defence"));
+        assert!(characters(&[("character/x.ron", &CRAWLER.replace("gun: (", "unused: ("))]).is_err(), "no unknown fields");
         // It sets the wheels; the file may not.
         assert!(edit("turn: 20,", "turn: 20, climb: 1.0,").contains("vehicle.climb"));
         // Only a vehicle walks.

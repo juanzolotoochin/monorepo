@@ -1022,19 +1022,32 @@ impl Settlement {
         self.validate_seats()
     }
 
-    /// Every vehicle seat holds one elder at most, and a rider sits on a
-    /// crawler's deck, in one of its places (CR.4).
+    /// Every vehicle seat holds one elder at most, a rider sits on a
+    /// crawler's deck, in one of its places (CR.4), and a gunner on a
+    /// crawler with a gun (TU.1 of the turret).
     fn validate_seats(&self) -> Result<(), String> {
         let mut taken = std::collections::BTreeSet::new();
         for (i, seat) in self.agents.iter().enumerate().filter_map(|(i, a)| Some((i, a.avatar()?.seat?))) {
             let Some(ix) = seat.aboard() else { continue };
             let v = self.vehicles.get(ix as usize).ok_or_else(|| format!("agent {i} aboard a missing vehicle {ix}"))?;
-            if let Some(place) = seat.place() {
-                if self.characters[v.character as usize].crawler.is_none() || place as usize >= crawler::RIDERS.len() {
-                    return Err(format!("agent {i} rides vehicle {ix} in no place {place}"));
+            let c = self.characters[v.character as usize].crawler.as_ref();
+            // Which seat it is: the pilot's, a rider's place, or the gun.
+            let key = match seat {
+                Seat::Rider { place, .. } => {
+                    if c.is_none() || place as usize >= crawler::RIDERS.len() {
+                        return Err(format!("agent {i} rides vehicle {ix} in no place {place}"));
+                    }
+                    Some(place)
                 }
-            }
-            if !taken.insert((ix, seat.place())) {
+                Seat::Gunner { .. } => {
+                    if c.is_none_or(|c| c.gun.is_none()) {
+                        return Err(format!("agent {i} mans vehicle {ix}, which has no gun"));
+                    }
+                    Some(u8::MAX)
+                }
+                Seat::Vehicle(_) | Seat::Building(_) => None,
+            };
+            if !taken.insert((ix, key)) {
                 return Err(format!("agent {i} shares a seat on vehicle {ix}"));
             }
         }

@@ -224,6 +224,10 @@ pub enum Seat {
     /// Riding a crawler's deck (CR.4 of the crawler, format 48): `place`
     /// indexes `crawler::RIDERS`. A rider can't steer.
     Rider { vehicle: super::VehicleIx, place: u8 },
+    /// Manning a crawler's gun (TU.1 of the turret, T2, format 50): its
+    /// place is `crawler::GUNNER`, behind the crates. Like a rider, a
+    /// gunner can't steer.
+    Gunner { vehicle: super::VehicleIx },
 }
 
 impl Seat {
@@ -231,14 +235,14 @@ impl Seat {
     pub fn vehicle(self) -> Option<super::VehicleIx> {
         match self {
             Seat::Vehicle(ix) => Some(ix),
-            Seat::Building(_) | Seat::Rider { .. } => None,
+            Seat::Building(_) | Seat::Rider { .. } | Seat::Gunner { .. } => None,
         }
     }
 
-    /// The vehicle it is aboard, driving or riding.
+    /// The vehicle it is aboard, driving, riding or at the gun.
     pub fn aboard(self) -> Option<super::VehicleIx> {
         match self {
-            Seat::Vehicle(ix) | Seat::Rider { vehicle: ix, .. } => Some(ix),
+            Seat::Vehicle(ix) | Seat::Rider { vehicle: ix, .. } | Seat::Gunner { vehicle: ix } => Some(ix),
             Seat::Building(_) => None,
         }
     }
@@ -247,7 +251,7 @@ impl Seat {
     pub fn place(self) -> Option<u8> {
         match self {
             Seat::Rider { place, .. } => Some(place),
-            Seat::Vehicle(_) | Seat::Building(_) => None,
+            Seat::Vehicle(_) | Seat::Building(_) | Seat::Gunner { .. } => None,
         }
     }
 
@@ -255,7 +259,7 @@ impl Seat {
     pub fn building(self) -> Option<super::BuildingIx> {
         match self {
             Seat::Building(b) => Some(b),
-            Seat::Vehicle(_) | Seat::Rider { .. } => None,
+            Seat::Vehicle(_) | Seat::Rider { .. } | Seat::Gunner { .. } => None,
         }
     }
 }
@@ -913,16 +917,16 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // doesn't stop a dig, keep a released route or end on a cancel.
     let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
     match avatar.seat {
-        Some(seat @ (Seat::Vehicle(_) | Seat::Rider { .. })) => {
+        Some(seat @ (Seat::Vehicle(_) | Seat::Rider { .. } | Seat::Gunner { .. })) => {
             // Sitting in a vehicle, a player can look around, climb out,
             // let go or respawn; a driver's movement went to the vehicle
-            // (`vehicle::drive`), and a rider's does nothing.
+            // (`vehicle::drive`), and a rider's or a gunner's does nothing.
             let ix = seat.aboard().expect("aboard a vehicle");
             match *action {
                 Action::Board => {
                     let v = &view.vehicles[ix as usize];
                     let vehicle_def = &view.characters[v.character as usize];
-                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, seat.place(), def.body.radius, view.terrain) {
+                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, super::crawler::deck_spot(seat), def.body.radius, view.terrain) {
                         avatar.seat = None;
                         body.position = position;
                         avatar.height = ground;

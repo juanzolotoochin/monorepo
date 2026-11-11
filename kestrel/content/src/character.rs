@@ -142,7 +142,7 @@ pub struct VehicleDef {
 /// its heading and `across` it; the front right leg's are written, and the
 /// other three mirror them (front left, front right, rear left, rear right,
 /// as `VehicleState::wheels`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrawlerDef {
     /// The body's length and width, in meters.
     pub length: Fx,
@@ -163,6 +163,22 @@ pub struct CrawlerDef {
     pub walk: GaitDef,
     /// Diagonal pairs, two at a time, on boost (C7).
     pub trot: GaitDef,
+    /// The gun on its cab's roof (`kestrel/CRAWLER_TURRET.md`, T1, T7), if
+    /// it has one; with it, a gunner's seat on the deck.
+    pub gun: Option<GunDef>,
+}
+
+/// A crawler's gun: where it is mounted and how it shoots.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GunDef {
+    /// Where it swivels, from the body's middle (on the cab's roof).
+    pub mount: Offset,
+    /// How far over the deck it is, in meters.
+    pub height: Fx,
+    /// Its ammo, range, period, damage, bolt and fireball, as a ballista
+    /// building's (`scenario::Defence`). Its ammo is an item's id; in a
+    /// scenario without that item the gun has nothing to load.
+    pub defence: crate::scenario::Defence,
 }
 
 /// A point on a crawler's body, in meters from its middle.
@@ -464,6 +480,18 @@ struct CrawlerFile {
     gap: Option<Fx>,
     walk: Option<GaitFile>,
     trot: Option<GaitFile>,
+    /// Replaced as a whole, not merged.
+    gun: Option<GunFile>,
+}
+
+/// A crawler's `gun`: its mount (meters from the body's middle, any
+/// sign), its height over the deck, and a ballista's `defence` section.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct GunFile {
+    mount: Option<OffsetFile>,
+    height: Option<Fx>,
+    defence: Option<crate::scenario::Defence>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -632,7 +660,7 @@ macro_rules! merge_fields {
 }
 
 merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, crawler, chase, sprite });
-merge_fields!(CrawlerFile { length, width, deck, reach, step, gap } { hip, stance, walk, trot });
+merge_fields!(CrawlerFile { length, width, deck, reach, step, gap, gun } { hip, stance, walk, trot });
 merge_fields!(OffsetFile { along, across } {});
 merge_fields!(GaitFile { cycle, swing, lift } {});
 merge_fields!(SpriteFile { health, respawn } { mine });
@@ -814,7 +842,24 @@ fn crawler_def(file: CrawlerFile) -> Result<CrawlerDef, String> {
     };
     let walk = gait(file.walk, "walk", 4)?;
     let trot = gait(file.trot, "trot", 2)?;
-    Ok(CrawlerDef { length, width, deck, hip, stance, reach, step, gap, walk, trot })
+    let gun = file
+        .gun
+        .map(|g| -> Result<GunDef, String> {
+            let mount = need(g.mount, "crawler.gun.mount")?;
+            let (along, across) = (need(mount.along, "crawler.gun.mount.along")?, need(mount.across, "crawler.gun.mount.across")?);
+            // On the body, anywhere over it.
+            if along.abs() > length / two || across.abs() > width / two {
+                return Err("crawler.gun.mount must be over the body".into());
+            }
+            let height = get(g.height, "gun.height", Fx::ZERO, Fx::from_int(6))?;
+            let defence = need(g.defence, "crawler.gun.defence")?;
+            if !defence.valid() {
+                return Err("invalid crawler.gun.defence".into());
+            }
+            Ok(GunDef { mount: Offset { along, across }, height, defence })
+        })
+        .transpose()?;
+    Ok(CrawlerDef { length, width, deck, hip, stance, reach, step, gap, walk, trot, gun })
 }
 
 fn sprite_def(file: SpriteFile) -> Result<SpriteDef, String> {

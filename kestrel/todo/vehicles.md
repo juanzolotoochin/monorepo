@@ -7,23 +7,6 @@ The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
 (decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
 branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 
-## TU.1 The gunner's seat and the lab
-
-- **Status:** open
-- **Why:** T2, T3, T7, T10: somewhere to stand and something to shoot.
-- **What to do:** the crawler's own `defence` section in content (copied
-  from the ballista's: stone, cap 20, range 7 m, its period, damage and
-  fireball) and its gun mount on the cab's roof; a gunner seat in `Seat`
-  (the back rider place becomes it: pilot, gunner, two riders); G boards
-  the cab, then the gun, then the riders. The lab: waves of ghouls on a
-  timer from two sides, two sprites, a stone pile. Save format up.
-- **Where:** `content/src/character.rs` (`CrawlerDef`),
-  `content/data/character/crawler.ron`, `sim/src/settlement/avatar.rs`,
-  `crawler.rs`, `vehicle.rs`, `app/assets/levels/crawler_lab*.ron`.
-- **Found in:** crawler turret design.
-- **Tests:** boarding order; a fifth can't; the gunner climbs down like a
-  rider; saves round-trip; the lab loads with its waves and sprites.
-
 ## TU.2 The turret shoots
 
 - **Status:** open
@@ -42,6 +25,18 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   elder fires at the reticle, clamped to 7 m, at the period, and the
   fireball on its cooldown; nothing fires empty; the town's and the
   forest's golden behaviour lines unchanged; prediction replay matches.
+- **Notes from TU.1:** the gun is `CrawlerDef::gun` (`GunDef`: `mount`,
+  `height` over the deck, `defence: scenario::Defence` with the ammo as
+  an item id). Resolve it to `buildings::Defence` (ticks, `ItemIx`) the
+  way `building_kinds` does (`buildings.rs`, the `defence:` closure:
+  worth making a function both use). Its `muzzle_height` is the default
+  1.6 m and means nothing on a gun: shots leave from `deck + height` at
+  `mount`. A gunner today goes through `avatar::act`'s seated branch with
+  riders: `Aim` passes through to the normal handling, `Attack` does
+  nothing and `Burst` is refused as `NotPossessing`; give `Seat::Gunner`
+  its own arm there. `Settlement::gunner_of(vehicle)` finds the gunner.
+  No turret or store state was added to `VehicleState` yet; the save
+  format is 50, so bump to 51.
 
 ## TU.3 Ammo
 
@@ -55,6 +50,11 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Found in:** crawler turret design.
 - **Tests:** a delivery while stopped; none while walking; the cap;
   conservation holds.
+- **Notes from TU.1:** the lab's stone pile is the depot `lab_stone`
+  (60 stones, only stone) at (-3, -4.5), north-west of the spawn, about
+  5.5 m from the parked crawler's west side; the gun's ammo is `stone`,
+  an item id resolved per scenario (unchecked: a scene without stone
+  parks a gun with nothing to load).
 
 ## TU.4 Crew the crawler
 
@@ -72,6 +72,13 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Tests:** a sprite boards a stopped crawler and shoots; waits for a
   walking one; climbs down on a job change; an elder bumps it; saves and
   hashes.
+- **Notes from TU.1:** the lab's sprites are `sprite_ash` and
+  `sprite_fern` by the stone pile, at (-4.6, -3.6) and (-4.6, -5.4), near
+  the south-east waves' path (ghouls turn on them within 3 m). `Seat`
+  lives on `AvatarState`, so a sprite at the gun needs its own link (a
+  sprite field, or a `VehicleState` crew slot); `free_seat` returns the
+  gun only while `gunner_of` is `None`, so an elder bumping a sprite needs
+  it to see the sprite too. `crawler::GUNNER` is where it stands.
 
 ## TU.5 The gun in the view
 
@@ -85,6 +92,11 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Found in:** crawler turret design.
 - **Tests:** the gun turns to its aim; the reticle shows for an elder
   gunner only; screenshots.
+- **Notes from TU.1:** the mount is (along 1.55, across 0), 1.3 m over
+  the deck: the rig's cab top (z 0.8 to 2.3, 1.3 m up). The gunner stands
+  at `crawler::GUNNER` behind the crates, drawn like a rider
+  (`vehicles::deck_offset`); they already get `PILOT_PULL`. The control
+  protocol's `seat` is `{"vehicle": 0, "gunner": true}` for a gunner.
 
 ## TU.6 Soak, demos and docs
 
@@ -99,6 +111,16 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** sim tests, `app/demos/`, docs.
 - **Found in:** crawler turret design.
 - **Tests:** the soak; the full suite.
+- **Notes from TU.1:** the soak (`crawler_lab_tests::soak`) now boards a
+  pilot, a gunner and two riders and checks the gunner's place every
+  tick; it still widens only `waves[0]` (the old south-east wave, 1 every
+  4 s), the other five waves run as written. The demo
+  (`demos/crawler_lab.json`) still boards three guests; since TU.1 the
+  first guest takes the gun, the others ride. The north-east waves set
+  off at 25 s and reach the crawler's start about a minute later, after
+  the demo has left it; its stomps are of the south-east wave as before
+  (not re-rendered in TU.1). The lab's waves end at 137 s (24 ghouls):
+  a longer soak or demo needs more, or widen a wave as the soak does.
 
 ## Collide rovers with bodies
 
@@ -255,7 +277,99 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/app/src/settlement.rs`, `scene.rs`.
 - **Found in:** CR.1 of the crawler.
 
+## A crawler's gun without its ammo
+
+- **Status:** open
+- **Why:** a crawler's gun names its ammo by item id in the character
+  file (`crawler.gun.defence.ammo`, TU.1 of the turret), which can't see
+  a scenario's items, so nothing checks it: a scene with no `stone` item
+  parks a crawler whose gun can never be loaded, silently.
+- **What to do:** once the gun shoots (TU.2), warn when a scene parks a
+  crawler whose ammo isn't one of its items, or let a scene's vehicle
+  entry name the ammo.
+- **Where:** `kestrel/sim/src/settlement/mod.rs` (vehicle setup),
+  `content/src/character.rs` (`GunDef`).
+- **Found in:** TU.1 of the crawler turret.
+
 ## Done
+
+## TU.1 The gunner's seat and the lab
+
+- **Status:** done (branch `kestrel-crawler-turret`, PR to come with TU.6)
+- **Why:** T2, T3, T7, T10: somewhere to stand and something to shoot.
+- **What to do:** the crawler's own `defence` section in content (copied
+  from the ballista's: stone, cap 20, range 7 m, its period, damage and
+  fireball) and its gun mount on the cab's roof; a gunner seat in `Seat`
+  (the back rider place becomes it: pilot, gunner, two riders); G boards
+  the cab, then the gun, then the riders. The lab: waves of ghouls on a
+  timer from two sides, two sprites, a stone pile. Save format up.
+- **Where:** `content/src/character.rs` (`CrawlerDef`),
+  `content/data/character/crawler.ron`, `sim/src/settlement/avatar.rs`,
+  `crawler.rs`, `vehicle.rs`, `app/assets/levels/crawler_lab*.ron`.
+- **Found in:** crawler turret design.
+- **Tests:** boarding order; a fifth can't; the gunner climbs down like a
+  rider; saves round-trip; the lab loads with its waves and sprites.
+- **Done:** content: `CrawlerDef::gun: Option<GunDef>` (`content/src/character.rs`),
+  `GunDef { mount: Offset, height, defence: scenario::Defence }`, the
+  scenario's own `Defence` reused (it gained `PartialEq, Eq` and a
+  `Defence::valid` for its numbers, shared with building kinds; the
+  ammo, an item id, isn't checked: a character can't know a scenario's
+  items, and the save test parks a crawler in a scene whose
+  only item is `none`, so a first cut that refused it at setup broke
+  that; a gun without its item has nothing to load). `CrawlerDef` is no longer `Copy` (the defence holds
+  its ammo's id), so callers clone or borrow it. `crawler.ron`'s `gun`:
+  mount (along 1.55, across 0) on the cab's roof, 1.3 m over the deck
+  (4.3 m over its feet); stone, cap 20, range 7 m, the ballista's
+  period 0.7 s, damage 1, bolt speed 8 and fireball. Documented in
+  `docs/character-definition.md`. Seats: `Seat::Gunner { vehicle }`
+  appended (save format 50); `crawler::RIDERS` is two places (in front
+  of the crates) and `crawler::GUNNER` the old back place (2.4 m back on
+  the middle), the gunner apart from the gun as the design page drew it;
+  `crawler::deck_spot(seat)` gives a seat's spot on the deck, and
+  `VehicleState::seat_at`, `vehicle::seat` and both `exit_spot`s take
+  that `Option<Offset>` instead of a place index. `free_seat`: the cab,
+  then the gun (on a crawler with a `gun`, whichever side the elder
+  reaches from), then the nearest rider's place; `gunner_of(vehicle)`.
+  The gunner rides, can't steer and climbs down as a rider (their own
+  first spot behind the box), and gets the camera pull and the
+  rider's drawn offset (`vehicles::deck_offset`); the control protocol's
+  `seat` reports `{"vehicle", "gunner": true}`. `validate_seats`: one
+  elder a seat, a rider in one of two places, a gunner only on a crawler
+  with a gun. Nothing shoots yet. No turret or store state in
+  `VehicleState` (TU.2 adds it with its save bump). The lab
+  (`crawler_lab_supply.ron`): six timed waves, three from the south-east
+  corner (the old wave first, then four at 50 s and five at 100 s) and
+  three from the north-east (three at 25 s, four at 75 s, five at 125 s),
+  24 ghouls whose diagonals cross by the parked crawler; two sprites
+  (`sprite_ash`, `sprite_fern`, at (-4.6, -3.6) and (-4.6, -5.4)) beside
+  a stone pile (`lab_stone`, 60 stones, at (-3, -4.5)). Tests:
+  `crawler_lab_tests` `a_pilot_a_gunner_and_two_riders_board_and_a_fifth_cannot`
+  (five on one tick: cab, gun, two riders, nobody; places held every tick
+  of a 5 s walk; gunner and riders steer nothing, with or without the
+  pilot), `the_gun_is_taken_after_the_cab_and_again_when_freed` (the
+  second aboard gets the gun from either side, freed it goes to the next;
+  no gun, no gunner; `validate` refuses two at the gun, a rider in place
+  2 and a gunner on a gunless crawler), `riders_climb_down_beside_it_on_the_ground`
+  (the gunner behind), `riding_is_predicted_and_saved` (gunner and rider
+  replays both match the sim for 300 ticks; both seats round-trip),
+  `the_lab_has_waves_from_two_sides_sprites_and_stone` (six timed waves
+  from two corners, at least 20 s apart, two sprites, 60 stones of the
+  gun's ammo; over 240 s all 24 ghouls are sent and every one comes
+  within 7 m of the parked crawler, `validate` every tick); the soak
+  boards pilot, gunner and two riders; save
+  `a_crawler_saved_with_riders_aboard_continues` with a gunner; content
+  `the_crawler_has_its_legs_and_its_wheels_follow_them` (the gun's
+  numbers against the town ballista's) and `crawlers_are_validated`;
+  app `a_riders_offset_matches_their_seat` (riders and the gunner) and
+  `the_rig_keeps_the_riders_places_clear` (the gunner's place too).
+  Results: `content_test`, `save_test` and the whole `sim_test` (402
+  passed, the four-minute soak included) pass; sim golden unchanged (no
+  golden scene has a vehicle, and the crawler's rules bytes are added
+  only when a character has one, as before). App `movement_test`
+  filtered to `vehicles`, `crawler` and `control` (45 tests) passes. The
+  existing crawler_lab tests needed no re-routing or re-timing: the new
+  waves start at 25 s, after `the_crawler_is_parked_beside_the_spawn`
+  counts three ghouls at 15 s. The demo wasn't re-rendered (TU.6).
 
 ## CR.6 Soak, tuning and demo
 

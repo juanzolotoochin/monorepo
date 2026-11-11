@@ -1,17 +1,47 @@
-// The Crawler Lab's rules (crawler_lab.ron): the elder, and three of the
-// Sacred Tree's ghouls a few seconds apart, walking from the south-east
-// corner past the parked crawler to the north-west one. Each turns on an
-// elder it sees within 3 m and gives up past 5 m. Player combat is off
-// (no player_health), so their swings do no harm; reaching the far corner
-// only counts against a base the lab doesn't have.
+// The Crawler Lab's rules (crawler_lab.ron): the elder, two sprites, a pile
+// of stone for the crawler's gun (kestrel/CRAWLER_TURRET.md, T6, T10), and
+// waves of the Sacred Tree's ghouls on a timer from two sides. Each ghoul
+// turns on an elder or sprite it sees within 3 m and gives up past 5 m.
+// Player combat is off (no player_health), so their swings do no harm to
+// elders; reaching the far corner only counts against a base the lab
+// doesn't have.
+//
+// The waves, about every 25 s, alternate between two diagonals that cross
+// by the parked crawler (2.5, 0), so the gun has targets wherever it
+// stands near the middle:
+// - from the south-east corner (26, 20) to the north-west one (-28, -28),
+//   passing about 3 m north of the spawn: three ghouls 6 s apart at 2 s
+//   (the wave the crawler's demo and soak were tuned on, kept first), then
+//   four at 50 s and five at 100 s;
+// - from the north-east corner (26, -28) to the south-west one (-28, 26),
+//   passing about 1 m south of the spawn: three at 25 s, four at 75 s
+//   and five at 125 s.
+// The ghouls walk at 0.6 m/s, so a wave reaches the crawler about a minute
+// after it sets off. 24 ghouls in all; then the lab is quiet.
+//
+// The sprites stand by the stone pile north-west of the spawn, near the
+// south-east wave's path, clear of the crawler's parking and of the demo's
+// route.
 (id: "crawler_lab", extent: 32.0,
  items: [(id: "stone", label: "STONE", skin: "item_iron", scale: 0.45)],
- depots: [], sources: [], links: [],
+ depots: [
+  (id: "lab_stone", label: "STONE PILE", position: (-3.0, -4.5), capacity: 4096, stock: [(item: "stone", units: 60)], only: Some("stone"))
+ ],
+ sources: [], links: [],
  agents: [
   (id: "elder", label: "ELDER", character: "elder", position: (0.0, 0.0), capacity: 5, one_kind: true, links: [], cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
  ],
+ sprites: [
+  (id: "sprite_ash", label: "ASH", character: "sprite", position: (-4.6, -3.6)),
+  (id: "sprite_fern", label: "FERN", character: "sprite", position: (-4.6, -5.4))
+ ],
  producers: [], defenders: [],
  waves: [
-  (id: "ghouls", position: (26.0, 20.0), target: (-28.0, -28.0), character: "ghoul_sacred_tree", first: 2.0, every: 6.0, count: 3)
+  (id: "ghouls", position: (26.0, 20.0), target: (-28.0, -28.0), character: "ghoul_sacred_tree", first: 2.0, every: 6.0, count: 3),
+  (id: "north_east_1", position: (26.0, -28.0), target: (-28.0, 26.0), character: "ghoul_sacred_tree", first: 25.0, every: 5.0, count: 3),
+  (id: "south_east_2", position: (26.0, 20.0), target: (-28.0, -28.0), character: "ghoul_sacred_tree", first: 50.0, every: 4.0, count: 4),
+  (id: "north_east_2", position: (26.0, -28.0), target: (-28.0, 26.0), character: "ghoul_sacred_tree", first: 75.0, every: 4.0, count: 4),
+  (id: "south_east_3", position: (26.0, 20.0), target: (-28.0, -28.0), character: "ghoul_sacred_tree", first: 100.0, every: 3.0, count: 5),
+  (id: "north_east_3", position: (26.0, -28.0), target: (-28.0, 26.0), character: "ghoul_sacred_tree", first: 125.0, every: 3.0, count: 5)
  ],
  base_health: 100)

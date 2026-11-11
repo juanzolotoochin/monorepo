@@ -271,13 +271,15 @@ fn draw(
     if current.vehicles.is_empty() {
         return;
     }
-    // The vehicle the local player is drawn sitting in, if any, driving or
-    // riding (CR.4), and a rider's place on the deck.
+    // The vehicle the local player is drawn sitting in, if any, driving,
+    // riding (CR.4) or at the gun (TU.1 of the turret), and a rider's or
+    // the gunner's spot on the deck.
     let seat = drawn.0.as_ref().and_then(|d| d.avatar().seat);
     let mine = seat.and_then(sim::settlement::Seat::aboard).map(usize::from);
-    let place = seat.and_then(sim::settlement::Seat::place);
+    let spot = seat.and_then(sim::settlement::crawler::deck_spot);
     let dt = time.delta_secs();
-    // Riders get the pilot's wider view too: they see what it steps over.
+    // Riders and the gunner get the pilot's wider view too: they see what
+    // it steps over.
     let aboard = mine.and_then(|i| current.vehicles.get(i)).is_some_and(|v| current.characters[v.character as usize].crawler.is_some());
     vehicles.pull = eased_pull(vehicles.pull, aboard, dt);
     let parts = vehicles.parts.get_or_insert_with(|| parts(&mut meshes, &mut materials));
@@ -285,7 +287,7 @@ fn draw(
     let drawn_count = rovers.iter().count();
     for (index, v) in current.vehicles.iter().enumerate().skip(drawn_count) {
         let t = tuning(v);
-        spawn(&mut commands, parts, index, t.wheelbase.to_f32(), t.track.to_f32(), current.characters[v.character as usize].crawler);
+        spawn(&mut commands, parts, index, t.wheelbase.to_f32(), t.track.to_f32(), current.characters[v.character as usize].crawler.clone());
     }
     for (entity, mut rover) in &mut rovers {
         let Some(v) = current.vehicles.get(rover.index) else { continue };
@@ -293,8 +295,9 @@ fn draw(
         let pose = match (mine == Some(rover.index), player.single()) {
             (true, Ok(p)) => {
                 let (yaw, _, _) = p.rotation.to_euler(EulerRot::YXZ);
-                // A rider sits off the middle: the body is that far back.
-                let off = place.map_or(Vec3::ZERO, |place| rider_offset(yaw, place));
+                // A rider or gunner sits off the middle: the body is that
+                // far back.
+                let off = spot.map_or(Vec3::ZERO, |o| deck_offset(yaw, o));
                 Pose { at: Vec3::new(p.translation.x, 0.0, p.translation.z) - off, base: p.translation.y - t.seat.to_f32(), heading: yaw }
             }
             _ => interpolated(&mirror, rover.index, v),
@@ -347,10 +350,10 @@ fn draw(
     }
 }
 
-/// Where the rider in `place` sits from a crawler's middle, in the view, the
-/// crawler facing `heading` (`crawler::RIDERS`).
-fn rider_offset(heading: f32, place: u8) -> Vec3 {
-    let o = sim::settlement::crawler::RIDERS[place as usize];
+/// Where someone at `o` on a crawler's deck (a rider or the gunner,
+/// `crawler::deck_spot`) sits from its middle, in the view, the crawler
+/// facing `heading`.
+fn deck_offset(heading: f32, o: content::character::Offset) -> Vec3 {
     let forward = Vec3::new(heading.sin(), 0.0, heading.cos());
     let right = Vec3::new(heading.cos(), 0.0, -heading.sin());
     forward * o.along.to_f32() + right * o.across.to_f32()
@@ -378,7 +381,7 @@ fn draw_crawler(
 ) {
     let (index, chassis) = (rover.index, rover.chassis);
     let drawn = rover.crawler.as_mut().expect("a crawler");
-    let c = drawn.def;
+    let c = drawn.def.clone();
     let legs = v.legs.as_ref().expect("a crawler's legs");
     let deck = pose.base + c.deck.to_f32();
     let root = Transform::from_translation(pose.at).with_rotation(Quat::from_rotation_y(pose.heading));
@@ -436,10 +439,12 @@ mod tests {
         for degrees in [0, 37, 90, 200, 300] {
             let heading = Fx::from_ratio(degrees * 31_416, 1_800_000);
             let v = VehicleState { character: ix, position: fx::FxVec2::ZERO, heading, speed: Fx::ZERO, height: Fx::ZERO, fall: Fx::ZERO, wheels: [Fx::ZERO; 4], control: Default::default(), legs: None };
-            for place in 0..3 {
-                let (seat, _) = v.seat_at(def, Some(place));
-                let off = rider_offset(heading.to_f32(), place);
-                assert!((off - Vec3::new(seat.x.to_f32(), 0.0, seat.y.to_f32())).length() < 1e-3, "place {place} at {degrees} degrees: {off} vs {seat:?}");
+            let seats = [sim::settlement::Seat::Rider { vehicle: 0, place: 0 }, sim::settlement::Seat::Rider { vehicle: 0, place: 1 }, sim::settlement::Seat::Gunner { vehicle: 0 }];
+            for place in seats {
+                let o = sim::settlement::crawler::deck_spot(place).unwrap();
+                let (seat, _) = v.seat_at(def, Some(o));
+                let off = deck_offset(heading.to_f32(), o);
+                assert!((off - Vec3::new(seat.x.to_f32(), 0.0, seat.y.to_f32())).length() < 1e-3, "{place:?} at {degrees} degrees: {off} vs {seat:?}");
             }
         }
     }

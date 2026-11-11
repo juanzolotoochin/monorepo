@@ -847,9 +847,9 @@ fn a_towns_volume_is_saved_as_its_edits() {
     assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
 }
 
-/// A crawler carrying a pilot and two riders (format 48: `Seat::Rider`)
-/// saves and loads with everyone in their place, saves again to the same
-/// bytes, and walks on alike.
+/// A crawler carrying a pilot, a gunner and a rider (format 48:
+/// `Seat::Rider`; 50: `Seat::Gunner`) saves and loads with everyone in
+/// their place, saves again to the same bytes, and walks on alike.
 #[test]
 fn a_crawler_saved_with_riders_aboard_continues() {
     use fx::{Fx, FxVec2};
@@ -888,7 +888,8 @@ fn a_crawler_saved_with_riders_aboard_continues() {
     let s = sim.world().settlement().unwrap();
     let seats: Vec<_> = agents.iter().map(|&a| s.seat(a as usize)).collect();
     assert_eq!(seats[0], Some(Seat::Vehicle(0)), "the pilot");
-    assert!(seats[1..].iter().all(|seat| seat.and_then(|s| s.place()).is_some()), "two riders: {seats:?}");
+    assert_eq!(seats[1], Some(Seat::Gunner { vehicle: 0 }), "the gunner (format 50)");
+    assert!(seats[2].and_then(|s| s.place()).is_some(), "a rider: {seats:?}");
     sim.step(&[Command { player: PlayerId(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, Fx::ONE), run: false } } }]);
     for _ in 0..90 {
         sim.step(&[]);
