@@ -41,7 +41,7 @@ use crate::terrain::Terrain;
 pub type VehicleIx = u16;
 
 /// How far beyond touching a player can be to climb in, in meters.
-const BOARD_REACH: Fx = Fx::from_ratio(4, 5);
+pub(super) const BOARD_REACH: Fx = Fx::from_ratio(4, 5);
 /// A stick pointing further than this from the heading backs up (120°).
 pub(super) const REVERSE_ANGLE: Fx = Fx::from_ratio(20_944, 10_000);
 /// The longest stretch of a move checked at once, in meters.

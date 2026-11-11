@@ -336,10 +336,12 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
             (pile.position, sim::settlement::piles::pile_radius(pile.units()).to_f32() + 0.15)
         }
         InteractTarget::Slot(b) => (s.buildings.get(b as usize)?.slot_position(s.building_kinds.get(s.buildings[b as usize].kind as usize)?), 0.45),
+        // A crawler's gun (T6 of the turret): round its 6 x 3 m box.
+        InteractTarget::Gun(v) => (s.vehicles.get(v as usize)?.position, 3.4),
     };
     let prompt = match (target, interaction) {
         // A ballista's ammo store is loaded, not picked up from (B2).
-        (InteractTarget::Output(_), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("LOAD {} {}", job.remaining, item(job.item)),
+        (InteractTarget::Output(_) | InteractTarget::Gun(_), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("LOAD {} {}", job.remaining, item(job.item)),
         (InteractTarget::Output(_) | InteractTarget::Pile(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
         (InteractTarget::Site(_), Interaction::Bundle(job)) => format!("DELIVER {} {}", job.remaining, item(job.item)),
         (_, Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("DEPOSIT {} {}", job.remaining, item(job.item)),
@@ -355,6 +357,7 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
             _ => "POSSESS".to_string(),
         },
         (_, Interaction::Leave { .. }) => "LEAVE".to_string(),
+        (_, Interaction::Walking { .. }) => "WAIT: THE CRAWLER IS WALKING".to_string(),
     };
     let position = service.to_view(position);
     Some(Highlight { target, position: position.with_y(0.0), radius, prompt })
@@ -404,7 +407,7 @@ pub fn interact(world: &mut World) -> Result<Used, String> {
             world.resource_mut::<SessionService>().command(CommandKind::Interact { agent, target });
             Ok(Used::Seat)
         }
-        Interaction::Needs { .. } => Err(highlight(world, target, &interaction).map_or_else(|| "Not ready".to_string(), |h| h.prompt)),
+        Interaction::Needs { .. } | Interaction::Walking { .. } => Err(highlight(world, target, &interaction).map_or_else(|| "Not ready".to_string(), |h| h.prompt)),
         Interaction::JobMenu => {
             let InteractTarget::Sprite(sprite) = target else { return Err("Not a sprite".into()) };
             let menu = job_menu(world, sprite);

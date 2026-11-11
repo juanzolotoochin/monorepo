@@ -7,36 +7,6 @@ The crawler's turret is [`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md)
 (decisions T1–T10), tasks TU.1–TU.6 run in order, one agent each, on
 branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 
-## TU.3 Ammo
-
-- **Status:** open
-- **Why:** T6.
-- **What to do:** an elder carrying stone interacts beside a stopped
-  crawler and delivers as much as fits (cap 20), as at the ballista; a
-  walking crawler takes none. Bolts spend stone (balances); the fireball
-  doesn't. The lab starts it full.
-- **Where:** `sim/src/settlement/interact.rs`, `vehicle.rs`.
-- **Found in:** crawler turret design.
-- **Tests:** a delivery while stopped; none while walking; the cap;
-  conservation holds.
-- **Notes from TU.1:** the lab's stone pile is the depot `lab_stone`
-  (60 stones, only stone) at (-3, -4.5), north-west of the spawn, about
-  5.5 m from the parked crawler's west side; the gun's ammo is `stone`,
-  an item id resolved per scenario (unchecked: a scene without stone
-  parks a gun with nothing to load).
-- **Notes from TU.2:** the store is `VehicleState::gun.store`
-  (`gun::GunState`), `Kinds::Only(stone)`, capacity 20, and already starts
-  full in any scene with the ammo item (`Settlement::arm`, as `initial`
-  supply), so "the lab starts it full" is done; deliveries can start from
-  a test that empties it (`store.remove` plus `accounts[..].consumed`, as
-  `turret_tests::nothing_fires_empty`). The holder is
-  `InventoryRef::Gun(vehicle)`: `bundle_job` returns `NotAHolder` for it,
-  `interact::stand_spot` `None`, the app's transfer endpoint `None`, and
-  `position_of` gives the crawler's middle; `economy::land` already puts a
-  unit there. `validate_guns` refuses any reservation on the store: TU.3
-  replaces that with `expected_reservations(InventoryRef::Gun(v))`. Bolts
-  already spend stone (balances count the store as stored).
-
 ## TU.4 Crew the crawler
 
 - **Status:** open
@@ -71,6 +41,16 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   (`crawler::exit_spot` takes the seat's spot). `free_seat` skips the gun
   while a sprite mans it; T3's bump replaces that. `validate_guns`
   refuses a sprite and an elder at one gun.
+- **Notes from TU.3:** `crawler::walking(v)` (speed, a fall, the
+  pilot's stick held, or a foot up) is the "walking crawler" rule the
+  deliveries use; the crew job's "climbs aboard when it stands still"
+  can reuse it, and `interact::beside_gun` (still, within `radius +
+  vehicle::BOARD_REACH` of the box, on its floor) is a ready "in reach"
+  check. Sprites don't deliver stone to the gun (only elders, through
+  interact); a sprite's job loop that restocks it would need its own
+  errand with `InventoryRef::Gun` (its dock check in `sprites.rs` still
+  uses `position_of`, the crawler's middle, with `DOCK_REACH`, which
+  never reaches past the box: use `beside_gun` there).
 
 ## TU.5 The gun in the view
 
@@ -103,6 +83,17 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   gunner's left button sends the avatar's facing as the offset (a bolt
   1 m out). `Event::GunShot` maps to the app's `Shot` (the ballista
   cue).
+- **Notes from TU.3:** the app's highlight (`input/town.rs`) has
+  `InteractTarget::Gun`: a ring of 3.4 m round the crawler's middle and
+  the prompt "LOAD N STONE", or "WAIT: THE CRAWLER IS WALKING" for
+  `Interaction::Walking`; but it only runs in a town (`town::active`:
+  building kinds), which the lab isn't, so in the lab the E key and the
+  highlight don't offer it (see "Interact in the Crawler Lab"); the
+  control protocol's `settlement_interact` does reach it. Nothing shows
+  the store's count yet: the ballista's card has its ammo, the crawler
+  has no card; a store readout (HUD line or a card on the crawler, from
+  `VehicleState::gun.store`) is TU.5's if cheap. Delivered units fly
+  to the crawler's middle (`position_of`), at its height.
 
 ## TU.6 Soak, demos and docs
 
@@ -132,6 +123,17 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   "every kill a stomp" no longer holds once the gun shoots. The gun only
   targets threats on the floor under its mount (`pick_target` in a
   volume): see "A crawler's gun shoots only its own floor".
+- **Notes from TU.3:** deliveries are `ammo_tests` (5). A soak with a
+  gunner can restock the gun: hand an elder stone from `lab_stone` and
+  `Interact { target: Gun(0) }` beside the box while the pilot holds no
+  stick (`validate` checks the store's reservations now). An elder's
+  bundle holds 5 in the lab (`capacity: 5`), so a full restock is four
+  trips from the pile, about 5.5 m from the parked crawler. A delivery
+  paused by a walking crawler keeps the elder's job (Busy) until it
+  stops beside them again or they cancel. The gun now also shoots
+  ghouls below it from the plateau or into the trench
+  (`combat::below_gun`), so the soak's waves may die to the gun on
+  other floors too.
 
 ## Collide rovers with bodies
 
@@ -302,9 +304,125 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
   `content/src/character.rs` (`GunDef`).
 - **Found in:** TU.1 of the crawler turret.
 
-## A crawler's gun shoots only its own floor
+## Interact in the Crawler Lab
 
 - **Status:** open
+- **Why:** the app's interact key and highlight run only in a town
+  (`input/town.rs`, `town::active`: a settlement with building kinds).
+  The Crawler Lab has none, so its E key uses the non-town targets and
+  never offers the crawler's gun (TU.3), though the sim and the control
+  protocol's `settlement_interact` do; a player can't restock the gun
+  by hand in the app, nor withdraw a bundle from the lab's stone pile by
+  the town's interact.
+- **What to do:** let a scene with a crawler's gun (or any settlement
+  scene) use the town's interact, or add `InteractTarget::Gun` to the
+  non-town targets, without bringing the town's HUD into the lab (see
+  "The Crawler Lab's HUD").
+- **Where:** `kestrel/app/src/input/town.rs`, `input/gameplay.rs`.
+- **Found in:** TU.3 of the crawler turret.
+
+## Boarding a crawler from another floor
+
+- **Status:** open
+- **Why:** G boards a crawler within 0.8 m of its box whatever floor the
+  elder stands on (`Settlement::board`), so an elder at the foot of the
+  plateau's 1.5 m face, or down in the trench, can climb aboard one
+  standing over them. Deliveries to its gun (TU.3) check the floor
+  (`interact::beside_gun`, `same_floor` with the body's height).
+- **What to do:** check the elder's floor against the crawler's in
+  `board` as the deliveries do, or decide reaching up is fine.
+- **Where:** `kestrel/sim/src/settlement/vehicle.rs` (`board`).
+- **Found in:** TU.3 of the crawler turret.
+
+## Done
+
+## TU.3 Ammo
+
+- **Status:** done (branch `kestrel-crawler-turret`, PR to come with TU.6)
+- **Why:** T6.
+- **What to do:** an elder carrying stone interacts beside a stopped
+  crawler and delivers as much as fits (cap 20), as at the ballista; a
+  walking crawler takes none. Bolts spend stone (balances); the fireball
+  doesn't. The lab starts it full.
+- **Where:** `sim/src/settlement/interact.rs`, `vehicle.rs`.
+- **Found in:** crawler turret design.
+- **Tests:** a delivery while stopped; none while walking; the cap;
+  conservation holds.
+- **Notes from TU.1:** the lab's stone pile is the depot `lab_stone`
+  (60 stones, only stone) at (-3, -4.5), north-west of the spawn, about
+  5.5 m from the parked crawler's west side; the gun's ammo is `stone`,
+  an item id resolved per scenario (unchecked: a scene without stone
+  parks a gun with nothing to load).
+- **Notes from TU.2:** the store is `VehicleState::gun.store`
+  (`gun::GunState`), `Kinds::Only(stone)`, capacity 20, and already starts
+  full in any scene with the ammo item (`Settlement::arm`, as `initial`
+  supply), so "the lab starts it full" is done; deliveries can start from
+  a test that empties it (`store.remove` plus `accounts[..].consumed`, as
+  `turret_tests::nothing_fires_empty`). The holder is
+  `InventoryRef::Gun(vehicle)`: `bundle_job` returns `NotAHolder` for it,
+  `interact::stand_spot` `None`, the app's transfer endpoint `None`, and
+  `position_of` gives the crawler's middle; `economy::land` already puts a
+  unit there. `validate_guns` refuses any reservation on the store: TU.3
+  replaces that with `expected_reservations(InventoryRef::Gun(v))`. Bolts
+  already spend stone (balances count the store as stored).
+- **Done:** deliveries go through the bundle machinery, as at a
+  ballista's store. `InteractTarget::Gun(vehicle)` (appended) is the
+  gun's store, `holder()` `InventoryRef::Gun`; it is offered for every
+  crawler with a store on the elder's floor (in a volume), reached from
+  its box, not a point: `interact::reach_distance` (the box's nearest
+  point, `crawler::box_nearest`) replaces the position distance in the
+  action's reach check, against `INTERACT_REACH` as for every target.
+  `interaction` for it is `bundle_job(.., Gun, Deposit)`: the store's
+  free room of the gun's ammo (`Kinds::Only(stone)`, so wood is
+  `WrongPile`, a full store `PileFull`, both no target), empty-handed
+  `DepositOnly` (nothing comes out, and `bundle_job` refuses any pickup
+  from a gun as `DepositOnly`). A walking crawler (`crawler::walking`:
+  speed, a fall, the pilot's stick held, or any foot up) makes
+  `bundle_job` refuse `BundleRefusal::Walking` (appended, "The crawler
+  is walking: wait for it to stop"), which `interaction` turns into a
+  readout, `Interaction::Walking { vehicle }`: the app's prompt says
+  "WAIT: THE CRAWLER IS WALKING" and the action pushes `BundleRefused {
+  Walking }`. The stand spot (`stand_spot` for `Gun`) is 0.4 m
+  (`GUN_STAND`, half the boarding reach) past the box's point nearest
+  the elder, and units move only while `interact::beside_gun`: the
+  crawler has a store and stands still, the elder is within
+  `radius + BOARD_REACH` (0.8 m, now `pub(super)`) of the box and on its
+  floor (`same_floor` against `v.height`). `read_avatar`'s dock check
+  uses it for a gun, so a delivery started while the crawler stood
+  still pauses while it walks (its job and the store's reservation stay)
+  and goes on when it stops with the elder beside it again, or the
+  elder cancels. Units fly from the elder to the crawler's middle
+  (`position_of`, unchanged) and land in the store (`land`, unchanged).
+  `validate_guns` checks the store's reservations against
+  `expected_reservations(Gun)` instead of refusing any. Seated, interact
+  still offers nothing. No save format change (no new state; the new
+  enum variants are appended). The app (`input/town.rs`) highlights the
+  crawler with a ring round its box and prompts "LOAD N STONE" as at a
+  ballista; but the lab isn't a town (no building kinds), so the app's
+  E key doesn't reach this path there yet: see "Interact in the Crawler
+  Lab". There is no crawler card to show the store (TU.5).
+  Also fixed "A crawler's gun shoots only its own floor" (below). Tests
+  (`ammo_tests`, 5): `a_stopped_crawler_takes_stone_up_to_its_cap` (an
+  elder 1.3 m off the box walks in and delivers 3 of 5 to a store of 17,
+  2 left in the bundle; full, no target carrying or empty-handed; a
+  pickup refused `DepositOnly`; seated, no target),
+  `a_walking_crawler_takes_none` (target `Walking`, the interact refused
+  `Walking`, nothing moves; a delivery started stopped moves no unit
+  while it walks, then finishes once it stops, 15 in the store),
+  `conservation_holds_through_deliveries_and_shots` (a sprite gunner's
+  bolts spend a stone each, a restock fills the room, `validate` and
+  the stone balance every tick), `a_delivery_is_saved_hashed_and_predicted`
+  (the elder's replay walks in as the sim does; a save with stone in
+  the air round-trips the store and its reservation and hashes alike on
+  one thread and four), `the_gun_shoots_ghouls_on_floors_below_it`.
+  Results: `sim_test` whole (414 passed, the soak included), `save_test`
+  pass; the golden file unchanged (hash and behaviour lines); app
+  `movement_test` filtered to vehicles, crawler, control, ballista,
+  interact and town (60) passes. Not run: the full suite (TU.6).
+
+## A crawler's gun shoots only its own floor
+
+- **Status:** done (branch `kestrel-crawler-turret`, with TU.3, PR to come with TU.6)
 - **Why:** in a volume scene `pick_target` and a bolt's flight keep to
   threats on the top floor at the shooter's position (`FLOOR_REACH`,
   1.5 m). For the crawler's gun that is the floor under its mount, so a
@@ -316,8 +434,24 @@ branch `kestrel-crawler-turret` stacked on `kestrel-crawler`.
 - **Where:** `kestrel/sim/src/settlement/combat.rs` (`pick_target`,
   `Projectile::floor_at`), `gun.rs`.
 - **Found in:** TU.2 of the crawler turret.
-
-## Done
+- **Done:** a gun's shot and pick reach any threat on a floor in sight
+  below the mount: `combat::below_gun(terrain, top, position, height)`,
+  true when the threat's feet are under the mount's height (`top`, over
+  the arena floor) and on the top floor at its position (within
+  `FLOOR_REACH`, so not in a tunnel under the ground). The range stays
+  on the ground (7 m), as a ballista's. `pick_target` takes `top:
+  Option<Fx>` (`None` for a ballista, unchanged), `Launcher` a `top`
+  (`Some` for the gun), and a gun's bolt stores it in
+  `Projectile::floor`, zero for a ballista's stock shot as before (a
+  gun's mount is never at 0 m), so `Projectile::reaches` tells the three
+  apart: an arrow its shooter's floor, a ballista's shot the top floor at
+  its launcher, a gun's `below_gun`. Town digests don't move (no gun
+  there, and a ballista's shot's floor stays zero). Test:
+  `ammo_tests::the_gun_shoots_ghouls_on_floors_below_it` (a sprite at
+  the gun hits a ghoul down in the trench from the ground beside it, 2 m
+  down, which the old rule missed, and one on the ground from the
+  plateau's north edge, 1.5 m down; that one the old rule already
+  reached, the plateau being exactly `FLOOR_REACH` up).
 
 ## TU.2 The turret shoots
 

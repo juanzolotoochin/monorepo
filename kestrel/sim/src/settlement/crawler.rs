@@ -637,6 +637,23 @@ pub fn box_distance_squared(pose: Pose, c: &CrawlerDef, p: FxVec2) -> Fx {
     along * along + across * across
 }
 
+/// The point of the body's box (seen from above) nearest `p`: `p` itself
+/// inside it.
+pub fn box_nearest(pose: Pose, c: &CrawlerDef, p: FxVec2) -> FxVec2 {
+    let o = pose.local(p);
+    let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
+    pose.at(Offset { along: o.along.clamp(-half_length, half_length), across: o.across.clamp(-half_width, half_width) })
+}
+
+/// Whether a crawler is walking (T6 of the turret): a foot swinging, the
+/// body moving, or its pilot's stick held (turning in place moves the body
+/// with no speed). A walking crawler takes no deliveries. A rover, or a
+/// crawler with no legs, never stands still for one.
+pub fn walking(v: &VehicleState) -> bool {
+    let Some(legs) = v.legs.as_ref() else { return true };
+    v.speed != Fx::ZERO || v.fall != Fx::ZERO || v.control.direction != FxVec2::ZERO || legs.up().next().is_some()
+}
+
 /// Where an elder of `radius` climbing down from `spot` (`None`: the
 /// pilot's, else a rider's or the gunner's, `deck_spot`) stands: its
 /// seat's own spot first (the pilot's beside the box's middle on the

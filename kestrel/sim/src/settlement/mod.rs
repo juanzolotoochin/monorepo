@@ -1328,6 +1328,8 @@ mod crawler_feet_tests;
 #[cfg(test)]
 mod turret_tests;
 #[cfg(test)]
+mod ammo_tests;
+#[cfg(test)]
 mod town_volume_tests;
 #[cfg(test)]
 mod path_tests;

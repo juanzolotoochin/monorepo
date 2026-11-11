@@ -863,7 +863,13 @@ impl Settlement {
         // A depot transfer's unit, or a bundle's at a pile; a haul's are
         // `read_pile_job`'s.
         if let Some(job) = a.carry.job.as_ref().filter(|j| !self.piles.as_ref().is_some_and(|lab| lab.is_haul(j))) {
-            if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
+            // A crawler's gun's while it stands still, from beside its box
+            // (T6 of the turret).
+            let docked = match job.other {
+                InventoryRef::Gun(v) => interact::beside_gun(&self.vehicles, &self.characters, terrain, v, a.body.position, avatar.height, a.radius()),
+                other => distance(a.body.position, self.position_of(other)) <= DOCK_REACH,
+            };
+            if tick >= job.next_tick && docked {
                 out.player_carry.push(CarryUnit { agent: me });
             }
         }
@@ -1110,19 +1116,23 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // the sim has nothing to do for it.
             let at = interact::position(view, target);
             if !body.alive() || matches!(target, interact::InteractTarget::Sprite(_)) {
-            } else if !at.is_some_and(|p| distance(body.position, p) <= interact::INTERACT_REACH) {
+            } else if !interact::reach_distance(view, target, body.position).is_some_and(|d| d <= interact::INTERACT_REACH) {
                 out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::OutOfReach });
             } else {
                 match interact::interaction(view, carry, target) {
                     Ok(Interaction::Bundle(job)) => {
-                        let spot = interact::stand_spot(view, job.other, body.position);
+                        let (other, spot) = (job.other, interact::stand_spot(view, job.other, body.position));
                         start_bundle(carry, job, me, out);
                         // Step in to the dock, as the verbs walk the elder
                         // there; the units move once it is in reach.
-                        if let (Some(at), Some(spot)) = (at, spot) {
-                            if distance(body.position, at) > DOCK_REACH {
-                                set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, view.vehicles, def);
-                            }
+                        // A crawler's gun's within the boarding reach of its
+                        // box (`interact::beside_gun`).
+                        let far = match other {
+                            InventoryRef::Gun(v) => !interact::beside_gun(view.vehicles, view.characters, view.terrain, v, body.position, avatar.height, def.body.radius),
+                            _ => at.is_some_and(|at| distance(body.position, at) > DOCK_REACH),
+                        };
+                        if let Some(spot) = spot.filter(|_| far) {
+                            set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, view.vehicles, def);
                         }
                     }
                     Ok(Interaction::Install { building, .. }) => out.install.push(Install { agent: me, building }),
@@ -1131,6 +1141,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                     // A site's needs are the view's to show; leaving is the
                     // seated elder's (above).
                     Ok(Interaction::JobMenu | Interaction::Needs { .. } | Interaction::Leave { .. }) => {}
+                    // A crawler's gun takes nothing while it walks (T6).
+                    Ok(Interaction::Walking { .. }) => out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::Walking }),
                     Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
                 }
             }
@@ -1262,6 +1274,9 @@ pub enum BundleRefusal {
     Carrying,
     /// Boarding a building another elder possesses.
     Possessed,
+    /// A delivery to a crawler's gun while the crawler walks (T6 of the
+    /// turret): it takes stone only standing still.
+    Walking,
 }
 
 impl BundleRefusal {
@@ -1286,6 +1301,7 @@ impl BundleRefusal {
             BundleRefusal::NoRoom => "No room to drop it here",
             BundleRefusal::Carrying => "Drop the bundle first (Q)",
             BundleRefusal::Possessed => "Another elder is in there",
+            BundleRefusal::Walking => "The crawler is walking: wait for it to stop",
         }
     }
 }
@@ -1311,8 +1327,9 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
         InventoryRef::Site(b) => view.buildings.get(b as usize).and_then(|b| b.site()).map(|(_, materials)| materials),
         // A dispenser's output is the pile lab's alone.
         InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).filter(|p| p.source.is_none()).map(|p| &p.inventory),
-        // A crawler's gun takes no bundles yet (deliveries are TU.3's).
-        InventoryRef::Agent(_) | InventoryRef::Collector | InventoryRef::Gun(_) => None,
+        // A crawler's gun's ammo store (T6 of the turret).
+        InventoryRef::Gun(v) => view.vehicles.get(v as usize).and_then(|v| v.gun.as_ref()).map(|g| &g.store),
+        InventoryRef::Agent(_) | InventoryRef::Collector => None,
     };
     let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
     let cargo = &carry.inventory;
@@ -1320,8 +1337,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
     let depot_item = |item: &ItemIx| (*item as usize) < view.items;
     let (item, units) = match direction {
         // A site is a drop-off: nothing is taken back out (D4), nor out of
-        // a ballista's ammo store (B2).
-        Direction::Pickup if matches!(other, InventoryRef::Site(_)) => return Err(BundleRefusal::DepositOnly),
+        // a ballista's ammo store (B2) or a crawler's gun's (T6).
+        Direction::Pickup if matches!(other, InventoryRef::Site(_) | InventoryRef::Gun(_)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup if matches!(other, InventoryRef::Output(b) if super::interact::ammo_store(view, b)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup => {
             // The holder's item: a tree pile's own, what an output holds, or
@@ -1365,6 +1382,10 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
             }
             if holder.free() == 0 {
                 return Err(BundleRefusal::PileFull);
+            }
+            // A crawler's gun takes it only while the crawler stands still.
+            if matches!(other, InventoryRef::Gun(v) if super::crawler::walking(&view.vehicles[v as usize])) {
+                return Err(BundleRefusal::Walking);
             }
             (item, cargo.available(item).min(holder.free()))
         }

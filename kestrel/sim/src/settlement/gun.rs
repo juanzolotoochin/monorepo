@@ -27,7 +27,10 @@
 //!   (`FireRefusal`, `BurstRefusal`).
 //!
 //! Each bolt spends one unit of the store (spent, in the balances). An
-//! empty gun never fires. Everyone aboard is sheltered: nothing hits a
+//! empty gun never fires. An elder carrying its ammo restocks it by
+//! interacting beside the crawler's box while the crawler stands still
+//! (TU.3, T6: `InteractTarget::Gun`, a bundle delivery as at a ballista);
+//! a walking crawler takes none and nothing comes back out. Everyone aboard is sheltered: nothing hits a
 //! seated elder or a sprite at the gun.
 
 use content::character::{CharacterDef, CrawlerDef, GunDef};
@@ -48,8 +51,9 @@ use crate::terrain::Terrain;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GunState {
     pub turret: Turret,
-    /// Its ammo item only, up to the gun's `ammo_cap`. Tests set it
-    /// directly; deliveries by hand are TU.3's.
+    /// Its ammo item only, up to the gun's `ammo_cap`. An elder carrying
+    /// it delivers by interacting beside the stopped crawler (TU.3,
+    /// `interact`); nothing comes back out.
     pub store: Inventory,
 }
 
@@ -153,11 +157,12 @@ impl Settlement {
 
     /// Stage 3: every gun a sprite mans that can shoot now aims at the
     /// nearest threat in range of its mount that the shots in flight won't
-    /// kill (`pick_target`), as a ballista does.
+    /// kill (`pick_target`), as a ballista does, on any floor in sight
+    /// below the mount (`below_gun`).
     pub(super) fn aim_guns(&self, tick: u64, terrain: &Terrain, out: &mut Vec<(FxVec2, Messages)>) {
         for ix in 0..self.vehicles.len() as VehicleIx {
             let Some(armed) = self.sprite_ready(ix, tick) else { continue };
-            if let Some(t) = self.pick_target(armed.from, armed.defence.range, terrain) {
+            if let Some(t) = self.pick_target(armed.from, armed.defence.range, Some(armed.top), terrain) {
                 let mut messages = Messages::default();
                 messages.gun_fire.push(GunFire { vehicle: ix, target: t.id, to: t.position });
                 out.push((armed.from, messages));
@@ -178,7 +183,7 @@ impl Settlement {
     fn shoot_gun(&mut self, tick: u64, ix: VehicleIx, armed: &Armed, target: Option<u64>, to: FxVec2, terrain: &Terrain) {
         let d = &armed.defence;
         let height = armed.top - terrain.height(armed.from);
-        let launcher = Launcher { from: armed.from, height, damage: d.damage, speed: d.speed, kind: d.projectile, defender: None };
+        let launcher = Launcher { from: armed.from, height, damage: d.damage, speed: d.speed, kind: d.projectile, defender: None, top: Some(armed.top) };
         self.launch_shot(tick, &launcher, InventoryRef::Gun(ix), d.ammo, target, to, Event::GunShot { vehicle: ix });
         let turret = &mut self.vehicles[ix as usize].gun.as_mut().expect("armed").turret;
         turret.aim = Some(to);
@@ -255,8 +260,8 @@ impl Settlement {
     }
 
     /// Every gun's state belongs to a crawler with a gun: its store of the
-    /// gun's ammo only, up to its cap, nothing reserved (nothing delivers
-    /// yet); every sprite at a gun is alive, holds no slot, and is alone
+    /// gun's ammo only, up to its cap, its reservations those of the
+    /// deliveries on it and the units flying there; every sprite at a gun is alive, holds no slot, and is alone
     /// there, with no elder.
     pub(super) fn validate_guns(&self) -> Result<(), String> {
         for (i, v) in self.vehicles.iter().enumerate() {
@@ -269,8 +274,9 @@ impl Settlement {
             if g.store.kinds != Kinds::Only(ammo) || g.store.capacity != gun.defence.ammo_cap {
                 return Err(format!("vehicle {i}'s gun store takes {:?} up to {}, not its gun's", g.store.kinds, g.store.capacity));
             }
-            if g.store.reserved_out.iter().chain(&g.store.reserved_in).any(|&u| u > 0) {
-                return Err(format!("vehicle {i}'s gun store has reservations"));
+            // Deliveries (TU.3) reserve on it as on any holder.
+            if (g.store.reserved_out.clone(), g.store.reserved_in.clone()) != self.expected_reservations(InventoryRef::Gun(i as VehicleIx)) {
+                return Err(format!("vehicle {i}'s gun store reservations drifted"));
             }
         }
         let mut manned = std::collections::BTreeSet::new();

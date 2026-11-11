@@ -1029,7 +1029,7 @@ impl Settlement {
         for (i, b) in self.buildings.iter().enumerate() {
             let kind = &self.building_kinds[b.kind as usize];
             let Some(defence) = ready_to_shoot(b, kind, tick) else { continue };
-            if let Some(t) = self.pick_target(b.position, defence.range, terrain) {
+            if let Some(t) = self.pick_target(b.position, defence.range, None, terrain) {
                 let mut messages = Messages::default();
                 messages.building_fire.push(BuildingFire { building: i as BuildingIx, target: t.id, to: t.position });
                 out.push((b.position, messages));
@@ -1044,7 +1044,7 @@ impl Settlement {
         let Some(b) = self.buildings.get(message.building as usize) else { return };
         let kind = &self.building_kinds[b.kind as usize];
         let Some(defence) = ready_to_shoot(b, kind, tick) else { return };
-        let launcher = Launcher { from: b.position, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
+        let launcher = Launcher { from: b.position, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None, top: None };
         let (ammo, period) = (defence.ammo, defence.period);
         let shot = Event::BuildingShot { building: message.building };
         self.launch_shot(tick, &launcher, InventoryRef::Output(message.building), ammo, Some(message.target), message.to, shot);
@@ -1068,7 +1068,7 @@ impl Settlement {
                 continue;
             }
             let from = self.buildings[b as usize].position;
-            let launcher = Launcher { from, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
+            let launcher = Launcher { from, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None, top: None };
             let (ammo, period) = (defence.ammo, defence.period);
             self.launch_shot(tick, &launcher, InventoryRef::Output(b), ammo, None, to, Event::BuildingShot { building: b });
             let turret = &mut self.buildings[b as usize].turret;

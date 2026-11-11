@@ -58,6 +58,16 @@ pub(super) fn same_floor(terrain: &Terrain, a: Fx, b: Fx) -> bool {
     terrain.volume.is_none() || (a - b).abs() <= FLOOR_REACH
 }
 
+/// Whether a crawler's gun whose mount is `top` over the arena floor sees
+/// a threat whose feet are at `height` at `position`, in a volume scene
+/// (TU.3 of the turret): on a floor under open sky (the top floor there,
+/// within `FLOOR_REACH`, so not in a tunnel) and below the mount. From the
+/// plateau or over the trench it shoots ghouls on the ground below; the
+/// range stays on the ground. Always elsewhere.
+pub(super) fn below_gun(terrain: &Terrain, top: Fx, position: FxVec2, height: Fx) -> bool {
+    terrain.volume.is_none() || (height < top && same_floor(terrain, height, terrain.height(position)))
+}
+
 /// A stable counter-based roll, as in the original game: outcomes never
 /// depend on how many unrelated hits happened elsewhere.
 pub fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
@@ -332,6 +342,10 @@ pub(super) struct Launcher {
     pub kind: ProjectileKind,
     /// The defender that shoots, if a `DefenderState` does.
     pub defender: Option<u16>,
+    /// A crawler's gun's mount height over the arena floor: its shot
+    /// reaches threats on any floor in sight below it (`below_gun`), not
+    /// only on the floor under it. `None` for a ballista.
+    pub top: Option<Fx>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -353,19 +367,24 @@ pub struct Projectile {
     /// A player's arrow in a volume scene: the floor it flies over, its
     /// shooter's feet (M8.2), so it hits only threats on that floor. Zero
     /// elsewhere and for a ballista's shot, which flies over the top floor
-    /// at its launcher.
+    /// at its launcher. A crawler's gun's shot (a stock one): its mount's
+    /// height over the arena floor, never zero (the deck is over its feet),
+    /// so it hits threats on any floor in sight below it (`below_gun`).
     #[serde(default)]
     pub floor: Fx,
 }
 
 impl Projectile {
-    /// The floor it flies over in a volume scene (M8.2): an arrow's
-    /// shooter's, a ballista's shot the top floor at its launcher.
-    fn floor_at(&self, terrain: &Terrain) -> Fx {
-        if self.item.is_some() {
-            terrain.height(self.from)
-        } else {
-            self.floor
+    /// Whether it can hit a threat whose feet are at `height` at
+    /// `position` in a volume scene (M8.2): an arrow one on its
+    /// shooter's floor, a ballista's shot one on the top floor at its
+    /// launcher, a crawler's gun's one on any floor in sight below its
+    /// mount (`below_gun`). Any elsewhere.
+    fn reaches(&self, terrain: &Terrain, position: FxVec2, height: Fx) -> bool {
+        match self.item {
+            Some(_) if self.floor != Fx::ZERO => below_gun(terrain, self.floor, position, height),
+            Some(_) => same_floor(terrain, height, terrain.height(self.from)),
+            None => same_floor(terrain, height, self.floor),
         }
     }
     /// The segment flown during `tick`.
@@ -1025,11 +1044,10 @@ impl Settlement {
             .min();
         let obstacle = static_obstacle.into_iter().map(|f| (f, None))
             .chain(cover.map(|(f, index)| (f, Some(index)))).min();
-        let floor = p.floor_at(terrain);
         let threat = self
             .threats
             .iter()
-            .filter(|t| same_floor(terrain, t.height, floor))
+            .filter(|t| p.reaches(terrain, t.position, t.height))
             .filter_map(|t| segment_disc(start, end, t.position, self.threat_radius(t)).map(|f| (f, t.id)))
             .min();
         match (threat, obstacle) {
@@ -1048,7 +1066,7 @@ impl Settlement {
         if !d.enabled || d.ready_at > tick || self.depots[d.depot as usize].inventory.available(d.ammo) == 0 {
             return;
         }
-        if let Some(t) = self.pick_target(d.position, d.range, terrain) {
+        if let Some(t) = self.pick_target(d.position, d.range, None, terrain) {
             out.fire.push(Fire { defender: index, target: t.id, to: t.position });
         }
     }
@@ -1057,14 +1075,22 @@ impl Settlement {
     /// a ballista building's both): the nearest threat within `range` of
     /// `from` that the projectiles already in flight to it won't kill,
     /// the lowest id on a tie. In a volume scene, only threats on the top
-    /// floor at `from`, which a ballista stands on (M8.2).
-    pub(super) fn pick_target(&self, from: FxVec2, range: Fx, terrain: &Terrain) -> Option<&Threat> {
+    /// floor at `from`, which a ballista stands on (M8.2); for a crawler's
+    /// gun, whose mount is `top` over the arena floor, on any floor in
+    /// sight below it (`below_gun`). The range is on the ground, as a
+    /// ballista's.
+    pub(super) fn pick_target(&self, from: FxVec2, range: Fx, top: Option<Fx>, terrain: &Terrain) -> Option<&Threat> {
         let floor = terrain.volume.as_ref().map(|_| terrain.height(from));
+        let reaches = |t: &Threat| match (top, floor) {
+            (_, None) => true,
+            (Some(top), Some(_)) => below_gun(terrain, top, t.position, t.height),
+            (None, Some(floor)) => same_floor(terrain, t.height, floor),
+        };
         self.threats
             .iter()
             .filter(|t| {
                 let incoming: u32 = self.projectiles.iter().filter(|p| p.target == Some(t.id)).map(|p| p.damage).sum();
-                distance(from, t.position) <= range && incoming < t.hp && floor.is_none_or(|floor| same_floor(terrain, t.height, floor))
+                distance(from, t.position) <= range && incoming < t.hp && reaches(t)
             })
             .min_by_key(|t| (distance(from, t.position), t.id))
     }
@@ -1372,7 +1398,7 @@ impl Settlement {
         if !d.enabled || d.ready_at > tick || self.depots[depot].inventory.available(ammo) == 0 {
             return;
         }
-        let launcher = Launcher { from: d.position, height: d.muzzle_height, damage: d.damage, speed: d.speed, kind: d.kind, defender: Some(message.defender) };
+        let launcher = Launcher { from: d.position, height: d.muzzle_height, damage: d.damage, speed: d.speed, kind: d.kind, defender: Some(message.defender), top: None };
         let period = d.period;
         let shot = Event::Shot { defender: message.defender };
         self.launch_shot(tick, &launcher, InventoryRef::Depot(depot as DepotIx), ammo, Some(message.target), message.to, shot);
@@ -1406,7 +1432,7 @@ impl Settlement {
             arrival,
             damage: launcher.damage,
             kind: launcher.kind,
-            floor: Fx::ZERO,
+            floor: launcher.top.unwrap_or(Fx::ZERO),
         });
         self.events.push(event);
     }

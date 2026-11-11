@@ -25,6 +25,11 @@
 //! - **A ground pile** (a dropped bundle, `piles`): a pickup, as an
 //!   output's, topping up a bundle of its item. A site never takes a
 //!   delivery from one: deliveries come from the bundle only.
+//! - **A crawler's gun** (T6 of the turret), from beside its box: a
+//!   delivery of its ammo while carrying it, as much as fits, as at a
+//!   ballista; nothing comes back out. Only while the crawler stands still
+//!   (`crawler::walking`): while it walks it is a readout
+//!   (`Interaction::Walking`) the action refuses as `BundleRefusal::Walking`.
 //! - **A building's slot** (D3), at its slot spot, empty-handed only and for
 //!   built buildings only: boarding it, as `Board` does, putting out a
 //!   sprite there. A sprite working inside is no target (its job menu is
@@ -43,6 +48,7 @@
 //! its own key (`Action::Drop`, D4), so a press that just misses a target
 //! never drops the bundle.
 
+use content::character::CharacterDef;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +57,8 @@ use super::avatar::{bundle_job, BundleRefusal};
 use super::buildings::STAND_GAP;
 use super::piles::{PileId, DROP_GAP};
 use super::avatar::Seat;
+use super::crawler::{self, Pose};
+use super::vehicle::{VehicleIx, VehicleState, BOARD_REACH};
 use super::{AgentIx, AgentState, BuildingIx, Carry, CarryJob, DepotIx, Direction, InventoryRef, ItemIx, Occupant, Settlement, Slot};
 use crate::nav::distance;
 use crate::terrain::Terrain;
@@ -77,6 +85,8 @@ pub enum InteractTarget {
     Pile(PileId),
     /// A built building's slot, boarded (D3), or left by its elder.
     Slot(BuildingIx),
+    /// A crawler's gun, its ammo store delivered to (T6 of the turret).
+    Gun(VehicleIx),
 }
 
 impl InteractTarget {
@@ -88,6 +98,7 @@ impl InteractTarget {
             InteractTarget::Depot(d) => Some(InventoryRef::Depot(d)),
             InteractTarget::Site(b) => Some(InventoryRef::Site(b)),
             InteractTarget::Pile(id) => Some(InventoryRef::Pile(id)),
+            InteractTarget::Gun(v) => Some(InventoryRef::Gun(v)),
             InteractTarget::Sprite(_) | InteractTarget::Slot(_) => None,
         }
     }
@@ -109,6 +120,10 @@ pub enum Interaction {
     Board { building: BuildingIx },
     /// Leaves the building the elder possesses.
     Leave { building: BuildingIx },
+    /// A crawler's gun that would take the bundle but walks: the view says
+    /// to wait for it to stop; the action refuses it
+    /// (`BundleRefusal::Walking`).
+    Walking { vehicle: VehicleIx },
 }
 
 /// The nearest target in reach that `me` can use now and what using it
@@ -141,6 +156,9 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
         .chain(piles)
         .chain(slots)
         .filter_map(|t| position(view, t).map(|p| (t, p)))
+        // A crawler's gun is reached from its box (T6 of the turret), on
+        // the elder's floor, as a building is.
+        .chain(guns(view, avatar.height).map(|v| (InteractTarget::Gun(v), gun_reach_point(view, v, from).expect("a gun"))))
         // A sprite working inside a building is no target: its slot is, so
         // interacting possesses the building and puts the sprite out. The
         // job menu is for sprites standing outside.
@@ -159,6 +177,41 @@ pub(super) fn ammo_store(view: &View, b: BuildingIx) -> bool {
     view.buildings.get(b as usize).is_some_and(|b| view.building_kinds[b.kind as usize].defence.is_some())
 }
 
+/// The crawlers with a gun's store, in a volume only those on an elder's
+/// floor at `height`.
+fn guns<'a>(view: &'a View, height: Fx) -> impl Iterator<Item = VehicleIx> + 'a {
+    view.vehicles.iter().enumerate().filter(move |(_, v)| v.gun.is_some() && super::combat::same_floor(view.terrain, v.height, height)).map(|(i, _)| i as VehicleIx)
+}
+
+/// The point of vehicle `v`'s box nearest `from`, if it is a crawler: what
+/// its gun is reached from.
+fn gun_reach_point(view: &View, v: VehicleIx, from: FxVec2) -> Option<FxVec2> {
+    let v = view.vehicles.get(v as usize)?;
+    let c = view.characters[v.character as usize].crawler.as_ref()?;
+    Some(crawler::box_nearest(Pose::of(v), c, from))
+}
+
+/// How far an agent at `from` is from `target`, for its reach: from its
+/// position (`position`), or a crawler's gun from its box.
+pub fn reach_distance(view: &View, target: InteractTarget, from: FxVec2) -> Option<Fx> {
+    match target {
+        InteractTarget::Gun(v) => gun_reach_point(view, v, from).map(|p| distance(from, p)),
+        _ => position(view, target).map(|p| distance(from, p)),
+    }
+}
+
+/// Whether a body of `radius` at `from`, its feet at `height`, is beside
+/// vehicle `v`'s gun for its units to move (T6 of the turret): the
+/// crawler has a store and stands still, and the body is within the
+/// boarding reach of its box (`vehicle::BOARD_REACH` past touching it),
+/// on its floor in a volume.
+pub(super) fn beside_gun(vehicles: &[VehicleState], characters: &[CharacterDef], terrain: &Terrain, v: VehicleIx, from: FxVec2, height: Fx, radius: Fx) -> bool {
+    let Some(vehicle) = vehicles.get(v as usize).filter(|v| v.gun.is_some() && !crawler::walking(v)) else { return false };
+    let Some(c) = characters[vehicle.character as usize].crawler.as_ref() else { return false };
+    let reach = radius + BOARD_REACH;
+    super::combat::same_floor(terrain, vehicle.height, height) && crawler::box_distance_squared(Pose::of(vehicle), c, from) <= reach * reach
+}
+
 /// Whether sprite `a` works inside a building.
 fn inside(view: &View, a: AgentIx) -> bool {
     view.buildings.iter().any(|b| b.slot == Slot::Occupied(Occupant::Sprite(a)))
@@ -174,6 +227,8 @@ pub fn position(view: &View, target: InteractTarget) -> Option<FxVec2> {
         InteractTarget::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
         InteractTarget::Pile(id) => view.piles?.piles.get(&id).map(|p| p.position),
         InteractTarget::Slot(b) => view.buildings.get(b as usize).map(|b| b.slot_position(&view.building_kinds[b.kind as usize])),
+        // Its middle; its reach is from its box (`reach_distance`).
+        InteractTarget::Gun(v) => view.vehicles.get(v as usize).filter(|v| v.gun.is_some()).map(|v| v.position),
         InteractTarget::Sprite(_) => None,
     }
 }
@@ -200,6 +255,13 @@ pub fn interaction(view: &View, carry: &Carry, target: InteractTarget) -> Result
             let direction = if carrying && takes { Direction::Deposit } else { Direction::Pickup };
             bundle_job(carry, view, other, direction).map(Interaction::Bundle)
         }
+        // A crawler's gun takes a delivery of its ammo, as a ballista's
+        // store does, only while the crawler stands still (T6).
+        InteractTarget::Gun(vehicle) => match bundle_job(carry, view, InventoryRef::Gun(vehicle), Direction::Deposit) {
+            Err(BundleRefusal::Walking) => Ok(Interaction::Walking { vehicle }),
+            Err(BundleRefusal::NothingCarried) => Err(BundleRefusal::DepositOnly),
+            delivery => delivery.map(Interaction::Bundle),
+        },
         // D5: a sprite is a target only empty-handed.
         InteractTarget::Sprite(_) if carrying => Err(BundleRefusal::HandsFull),
         InteractTarget::Sprite(_) => Ok(Interaction::JobMenu),
@@ -246,15 +308,22 @@ pub fn board_refusal(carry: &Carry, slot: Slot, me: AgentIx) -> Option<BundleRef
 /// depot's dock, just in front of an output pile (or the spot a site's will
 /// take), away from its building (the pile is that close to the
 /// footprint), or `PILE_STAND` from a ground pile on its side. Within the
-/// dock's reach of the holder.
+/// dock's reach of the holder. A crawler's gun's: `GUN_STAND` past the
+/// point of its box nearest `from` (`from` itself under it), within the
+/// boarding reach (`beside_gun`).
 pub fn stand_spot(view: &View, holder: InventoryRef, from: FxVec2) -> Option<FxVec2> {
     match holder {
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
         InventoryRef::Output(b) | InventoryRef::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position + (b.output_position - b.position).normalize_or_zero() * STAND_GAP),
         InventoryRef::Pile(id) => view.piles?.piles.get(&id).map(|p| p.position + (from - p.position).normalize_or_zero() * PILE_STAND),
-        InventoryRef::Agent(_) | InventoryRef::Collector | InventoryRef::Gun(_) => None,
+        InventoryRef::Gun(v) => gun_reach_point(view, v, from).map(|p| if p == from { p } else { p + (from - p).normalize_or_zero() * GUN_STAND }),
+        InventoryRef::Agent(_) | InventoryRef::Collector => None,
     }
 }
+
+/// How far past a crawler's box an elder delivering to its gun stands:
+/// half the boarding reach, so within it whatever the elder's radius.
+const GUN_STAND: Fx = Fx::from_ratio(2, 5);
 
 /// How far from a ground pile's center the agent stands to pick it up: as
 /// far as a drop puts it (`piles::DROP_GAP`), well within the dock's reach.
