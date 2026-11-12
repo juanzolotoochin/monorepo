@@ -34,7 +34,7 @@ fn scene(layout: &VolumeLayout, spawn: [i32; 2]) -> Result<World, String> {
 }
 
 /// The gym as the app makes it, the elder at the scene's spawn.
-fn gym() -> Simulation {
+pub(super) fn gym() -> Simulation {
     assert!(SCENE.contains("spawn: (28.0, 0.0, 26.0)"), "the scene's spawn");
     Simulation::from_world(scene(&layout(), [28, 26]).unwrap(), 1)
 }

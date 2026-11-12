@@ -241,7 +241,9 @@ pub fn dispatch(world: &mut World) {
             town_feedback(world, fired);
         }
     }
-    let jumping = world.resource::<SceneView>().player().jump().is_some();
+    // A climber's Space is a jump too: it grabs a face or lunges on one.
+    let player = world.resource::<SceneView>().player();
+    let jumping = player.jump().is_some() || player.climb.is_some();
     for &edge in &frame.gameplay.edges {
         match edge {
             Edge::Attack => attack(world),

@@ -56,6 +56,12 @@ regions reached by hash, streaming in and out.
 - On the wall the stick moves up, down and sideways (about 1 m/s up).
   Outside corners wrap; at the top the elder pulls over automatically.
 - Jump (Space) on the ground at a wall grabs higher. G or B lets go.
+- Changed in CL.2: G lets go (it is Board, which has nothing to board on
+  a wall; on a gamepad the left stick's click). The pad's B stays Drop, so
+  no new command. On a face the stick is read against the face: into the
+  rock climbs up, out of it climbs down, along it moves sideways. Only the
+  stick (`Walk`) grabs, after 0.15 s of pushing within 60 degrees of
+  straight in; a click-to-move route never does.
 
 ### K4. A wheel climbs about 15 m
 
@@ -72,6 +78,11 @@ regions reached by hash, streaming in and out.
 
 - The elder lets go. The wheel flashes red near empty and refills only
   once they stand on ground.
+- Added in CL.2: once empty the elder can't grab again until the wheel is
+  full, and after letting go not until they stand on a floor. A climber
+  with no jump of its own (the elder) now falls under the climb's gravity
+  (20 m/s²) off a face and off any ledge in a volume, where it used to
+  drop to the floor at once.
 
 ### K7. Falls hurt
 

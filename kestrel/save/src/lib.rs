@@ -146,7 +146,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     it (`Terrain::mine_volume`) and is saved as its edits over the
 ///     generated one (`WorldSection::volume_edits`, M8.8 of the Sacred
 ///     Tree depths), remade at load.
-pub const FORMAT_VERSION: u32 = 46;
+/// 47: an avatar keeps its climbing (`AvatarState::climbing`: the face it
+///     holds, its phase, the stamina wheel; CL.2 of the climbing design).
+pub const FORMAT_VERSION: u32 = 47;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

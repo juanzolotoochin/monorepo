@@ -301,6 +301,10 @@ fn rules_hash(names: &Names, rules: &Rules) -> u64 {
     if sprites.iter().any(Option::is_some) {
         bytes.extend(postcard::to_allocvec(&sprites).expect("encode sprites"));
     }
+    let climbs: Vec<_> = rules.characters.iter().map(|c| c.climb).collect();
+    if climbs.iter().any(Option::is_some) {
+        bytes.extend(postcard::to_allocvec(&climbs).expect("encode climbs"));
+    }
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
@@ -583,6 +587,31 @@ mod tests {
         }
         let attack_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].attack;
         assert_eq!(attack_of("ghoul_sacred_tree"), attack_of("ghoul_forest"), "it swings as the forest's");
+    }
+
+    #[test]
+    fn a_climb_section_parses_and_only_the_elder_has_one() {
+        use scenario::ticks_from_60hz;
+        let builtin = Content::builtin();
+        let climb_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].climb;
+        let climb = climb_of("elder").expect("the elder climbs");
+        assert_eq!((climb.up, climb.side), (per_tick(Fx::ONE), per_tick(Fx::from_ratio(3, 2))));
+        // A full wheel on the move lasts 15 s: about 15 m straight up.
+        let ticks = (Fx::ONE / climb.drain).round().floor_to_int();
+        assert_eq!(ticks, 15 * TICKS_PER_SECOND as i64);
+        assert!(climb.hang < climb.drain && climb.refill > climb.drain);
+        assert_eq!((climb.grab, climb.lunge_ticks), (ticks_from_60hz(9), ticks_from_60hz(20)));
+        assert_eq!(climb.lunge_cost, "0.2".parse::<Fx>().unwrap());
+        for name in ["exosuit", "exosuit_moonlit", "worker", "ghoul", "sprite"] {
+            assert!(climb_of(name).is_none(), "{name} doesn't climb");
+        }
+        let exosuit = include_str!("../data/character/exosuit.ron");
+        let elder = include_str!("../data/character/elder.ron");
+        let bad = |ron: &str| characters(&[("character/exosuit.ron", exosuit), ("character/x.ron", ron)]).unwrap_err().message;
+        assert!(bad(&elder.replace("up: 1.0", "up: 0.0")).contains("climb.up"));
+        assert!(bad(&elder.replace("grab: 9,", "")).contains("climb.grab"));
+        assert!(bad(&elder.replace("lunge_cost: 0.2", "lunge_cost: 2.0")).contains("climb.lunge_cost"));
+        assert!(bad(&GHOUL.replace("breach_damage: 1)", "breach_damage: 1), climb: (up: 1.0)")).contains("only Player"));
     }
 
     #[test]

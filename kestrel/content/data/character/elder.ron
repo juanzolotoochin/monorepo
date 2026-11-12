@@ -2,13 +2,31 @@
 // bundles by hand and possesses buildings. It walks and carries as the
 // exosuit does, and digs as it does too (a layer in 120 frames, 2 s), but
 // has no jetpack. Drawn by the exosuit actor until it has a flame body of
-// its own.
+// its own. It climbs walls (kestrel/CLIMBING.md, K2-K6).
 (
     base: "exosuit",
     sim: (
         abilities: [
             Dig(time: 120, centering: 1.5),
         ],
+        climb: (
+            // m/s: up a face, and down or along it.
+            up: 1.0, down: 1.5, side: 1.5,
+            // A full wheel lasts 15 s on the move (about 15 m straight up)
+            // and 90 s hanging still; on a floor an empty one refills in 2 s.
+            wheel: 15.0, hang: 90.0, refill: 2.0,
+            // Frames pushing into a face before grabbing on (0.15 s), so
+            // brushing a cliff while walking along it doesn't.
+            grab: 9,
+            // Space at a face grabs 1.5 m up it; on a face it lunges 2 m
+            // in 20 frames, for a fifth of the wheel.
+            leap: 1.5, lunge: 2.0, lunge_time: 20, lunge_cost: 0.2,
+            // Frames pulling over the top.
+            mantle: 30,
+            // Off a face or a ledge it falls under 20 m/s², landing in 8
+            // frames.
+            fall: 20.0, land: 8,
+        ),
     ),
     view: (),
 )

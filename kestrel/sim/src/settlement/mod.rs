@@ -19,6 +19,7 @@ mod agent;
 pub mod avatar;
 pub mod buildings;
 pub mod chase;
+pub mod climb;
 pub mod clock;
 pub mod combat;
 pub mod fire;
@@ -1182,6 +1183,12 @@ impl Settlement {
         if floors.iter().any(|&h| h != Fx::ZERO) {
             bytes.extend(postcard::to_allocvec(&floors).expect("floors encode"));
         }
+        // And avatars' climbing only once any climbs or spends stamina
+        // (CL.2), so other scenes hash as they did.
+        let climbing: Vec<_> = self.agents.iter().filter_map(AgentState::avatar).map(|a| a.climbing).collect();
+        if climbing.iter().any(|c| *c != climb::Climbing::default()) {
+            bytes.extend(postcard::to_allocvec(&climbing).expect("climbing encodes"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -1239,6 +1246,8 @@ mod dark_tests;
 mod tests;
 #[cfg(test)]
 mod climbing_gym_tests;
+#[cfg(test)]
+mod climbing_tests;
 #[cfg(test)]
 mod combat_tests;
 #[cfg(test)]

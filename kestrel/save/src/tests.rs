@@ -846,3 +846,40 @@ fn a_towns_volume_is_saved_as_its_edits() {
     assert_eq!(loaded.terrain().volume.as_ref().unwrap().ore(cell.0, cell.1), None);
     assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
 }
+
+/// A climb in progress (format 47) is saved and continues alike: the elder
+/// on a 10 m wall, mid-lunge, its wheel part spent.
+#[test]
+fn a_climb_in_progress_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    let content = Content::builtin();
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-8, -8), (8, 8), -8, 0);
+    volume.fill_box((2, -4), (4, 4), 0, 20);
+    let setup = sim::settlement::SceneSetup { player: "elder".into(), extent: Fx::from_int(8), diggable: true, sloped: true, volume: Some(volume), ..Default::default() };
+    let mut sim = Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    let agent = sim.world().settlement().unwrap().player().unwrap();
+    let command = |kind| [sim::Command { player: sim::PlayerId(0), kind }];
+    let east = sim::CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
+    sim.step(&command(east));
+    for _ in 0..150 {
+        sim.step(&[]);
+    }
+    sim.step(&command(sim::CommandKind::Jump { agent }));
+    let climbing = sim.world().settlement().unwrap().agents[agent as usize].avatar().unwrap().climbing;
+    assert!(climbing.climb.is_some_and(|c| matches!(c.phase, sim::settlement::climb::ClimbPhase::Lunge { .. })), "{climbing:?}");
+    assert!(climbing.spent > Fx::ZERO);
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(loaded.settlement().unwrap().agents[agent as usize].avatar().unwrap().climbing, climbing);
+    assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
+    let mut resumed = Simulation::from_world(loaded, 1);
+    for tick in 0..300 {
+        let turn = if tick == 100 { command(sim::CommandKind::Board { agent }).to_vec() } else { Vec::new() };
+        let (expected, actual) = (sim.step(&turn), resumed.step(&turn));
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("tick {tick}: first difference at {difference}");
+        }
+    }
+}
