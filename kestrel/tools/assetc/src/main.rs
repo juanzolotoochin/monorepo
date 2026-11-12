@@ -180,6 +180,29 @@ mod tests {
         let bytes = serde_json::to_vec(&pack).unwrap();
         assert_eq!(ScenePack::decode(&bytes).unwrap().scene.volume, Some(volume));
     }
+    /// The Climbing Gym (CL.1 of `kestrel/CLIMBING.md`), as Bazel compiles it.
+    const CLIMBING_GYM: &str = include_str!("../../../app/assets/levels/climbing_gym.ron");
+    #[test]
+    fn the_climbing_gym_loads_and_validates() {
+        let scene: Scene = ron::from_str(CLIMBING_GYM).unwrap();
+        let volume = scene.volume.clone().expect("the gym has a volume");
+        assert_eq!(volume.extent, 64, "128 m across");
+        assert_eq!(scene.player, "elder");
+        assert!(scene.features.contains(&voxel_assets::SceneFeature::TurningView));
+        let pack = assemble(scene.clone(), vec![]).unwrap();
+        assert_eq!(pack.scene.id, "climbing-gym");
+        assert_eq!(pack.scene.zoom_out, Some(80.0));
+        let bytes = serde_json::to_vec(&pack).unwrap();
+        let decoded = ScenePack::decode(&bytes).unwrap();
+        assert_eq!(decoded.scene.volume, Some(volume));
+        assert_eq!(decoded.scene.zoom_out, Some(80.0));
+        // A zoom out nearer than the usual, or past the most, is refused.
+        for zoom in [20.0, 200.0] {
+            let mut scene = scene.clone();
+            scene.zoom_out = Some(zoom);
+            assert!(assemble(scene, vec![]).unwrap_err().contains("zoom_out"));
+        }
+    }
     #[test]
     fn a_malformed_volume_box_is_refused() {
         let refused = |edit: &dyn Fn(&mut sim::volume::VolumeBox), wanted: &str| {
@@ -193,7 +216,7 @@ mod tests {
         refused(&|b| if let Solid { min, .. } = b { min[0] = 30 }, "past its max");
         refused(&|b| if let Solid { max, .. } = b { max[1] = 40 }, "leave the map");
         refused(&|b| if let Solid { top, .. } = b { *top = 0 }, "not below its top");
-        refused(&|b| if let Solid { top, .. } = b { *top = 100 }, "leave layers");
+        refused(&|b| if let Solid { top, .. } = b { *top = 140 }, "leave layers");
         // An unknown material, or a field a box doesn't have, doesn't parse.
         for (from, to) in [("material: AmberOre", "material: Gold"), ("bottom: 9, top: 11", "bottom: 9, height: 11")] {
             assert!(TUNNEL_LAB.contains(from));

@@ -99,9 +99,16 @@ pub enum Command {
     /// Turns the town's view `turns` quarter turns around the camera's
     /// target, as Z (positive, counter-clockwise seen from above) or C
     /// (negative, clockwise) does; the turn then eases over a quarter
-    /// second. View only. Fails outside a town.
+    /// second. View only. Fails outside a town or a `TurningView` scene
+    /// (the Climbing Gym).
     CameraRotate {
         turns: i32,
+    },
+    /// Zooms the view to show `height` meters top to bottom, as the wheel
+    /// does (it eases there), within the scene's range: 3 to 26 m, or to
+    /// the scene's own `zoom_out`. View only.
+    CameraZoom {
+        height: f32,
     },
     /// Possesses building `building` (its index), as interacting with its
     /// slot or the boarding key does: walks the elder beside it first when

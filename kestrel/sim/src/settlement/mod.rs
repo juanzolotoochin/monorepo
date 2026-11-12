@@ -1238,6 +1238,8 @@ mod dark_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod climbing_gym_tests;
+#[cfg(test)]
 mod combat_tests;
 #[cfg(test)]
 mod scene_tests;

@@ -11,6 +11,8 @@ exports_files(
         "levels/sacred_tree_supply.ron",
         # The sim's and assetc's Tunnel Lab tests read its volume.
         "levels/tunnel_lab.ron",
+        # The sim's and assetc's Climbing Gym tests read its volume.
+        "levels/climbing_gym.ron",
     ],
     visibility = ["//kestrel:__subpackages__"],
 )
@@ -169,6 +171,15 @@ scene_assets(
 scene_assets(
     name = "tunnel_lab",
     layout = "levels/tunnel_lab.ron",
+    prefabs = [],
+)
+
+# The climbing exploration's map: flat ground round a 40 m mountain, with
+# faces of 5 to 40 m, ledges, an overhang, an inside corner, a chimney and
+# three pillars (kestrel/CLIMBING.md, K1).
+scene_assets(
+    name = "climbing_gym",
+    layout = "levels/climbing_gym.ron",
     prefabs = [],
 )
 

@@ -504,11 +504,15 @@ impl Volume {
 pub const LAYOUT_EXTENTS: std::ops::RangeInclusive<i32> = 8..=128;
 /// The most boxes a [`VolumeLayout`] has.
 pub const MAX_BOXES: usize = 256;
-/// The layers a box may reach: from 16 m below the scene's zero to 32 m
-/// above it.
-pub const LAYOUT_LAYERS: std::ops::RangeInclusive<i32> = -32..=64;
+/// The layers a box may reach: from 16 m below the scene's zero to 64 m
+/// above it (K10 of the climbing design; it was 32 m before the Climbing
+/// Gym's 40 m mountain). Nothing in the sim or the view sizes anything by
+/// it: columns keep their spans, the view meshes and bands walls per
+/// span, and the fog and light keep only the floors they reach.
+pub const LAYOUT_LAYERS: std::ops::RangeInclusive<i32> = -32..=128;
 /// The most cells all of a layout's boxes together cover (a 64 m map
-/// filled 16 m deep is about 133 000).
+/// filled 16 m deep is about 133 000; the Climbing Gym's 128 m map, its
+/// ground 4 m deep and a 40 m mountain on it, about 185 000).
 pub const MAX_LAYOUT_CELLS: u64 = 1 << 22;
 
 /// A scene's volume as authored (V10 of the verticality design): solid
@@ -626,7 +630,7 @@ impl VolumeLayout {
             }
             if !LAYOUT_LAYERS.contains(&bottom) || !LAYOUT_LAYERS.contains(&top) {
                 return Err(format!(
-                    "volume box {i}: layers {bottom} to {top} leave layers {} to {} (-16 m to 32 m)",
+                    "volume box {i}: layers {bottom} to {top} leave layers {} to {} (-16 m to 64 m)",
                     LAYOUT_LAYERS.start(),
                     LAYOUT_LAYERS.end()
                 ));

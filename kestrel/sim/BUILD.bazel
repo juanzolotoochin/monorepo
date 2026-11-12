@@ -27,6 +27,7 @@ rust_test(
     size = "small",
     compile_data = [
         "testdata/golden.txt",
+        "//kestrel/app/assets:levels/climbing_gym.ron",
         "//kestrel/app/assets:levels/combat_arena_supply.ron",
         "//kestrel/app/assets:levels/forest_supply.ron",
         "//kestrel/app/assets:levels/sacred_tree.ron",
@@ -35,7 +36,8 @@ rust_test(
     ],
     crate = ":sim",
     edition = "2021",
-    # The Tunnel Lab's tests read its scene's volume section.
+    # The Tunnel Lab's and Climbing Gym's tests read their scenes' volume
+    # sections.
     deps = ["@crates//:ron"],
 )
 

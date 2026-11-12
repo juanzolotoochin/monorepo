@@ -35,6 +35,7 @@ rust_binary(
         "//kestrel/app/assets:asset_guide",
         "//kestrel/app/assets:atlantis",
         "//kestrel/app/assets:boulder_lab",
+        "//kestrel/app/assets:climbing_gym",
         "//kestrel/app/assets:combat_arena",
         "//kestrel/app/assets:dig_lab",
         "//kestrel/app/assets:field",
@@ -253,6 +254,21 @@ game_demo(
 filegroup(
     name = "tunnel_lab_demo_video",
     srcs = [":tunnel_lab_demo"],
+    output_group = "video",
+)
+
+# The Climbing Gym (CL.1 of kestrel/CLIMBING.md): the elder walks round the
+# 40 m mountain while the view turns and zooms out.
+game_demo(
+    name = "climbing_gym_demo",
+    game = ":demo",
+    script = "demos/climbing_gym.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "climbing_gym_demo_video",
+    srcs = [":climbing_gym_demo"],
     output_group = "video",
 )
 

@@ -454,12 +454,24 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Instant)
         }
         Command::CameraRotate { turns } => {
-            if !crate::input::town::active(world) {
-                return Err("The view turns only in a town".into());
+            if !crate::input::town::turns_view(world) {
+                return Err("The view turns only in a town or the Climbing Gym".into());
             }
             let view = &mut world.resource_mut::<crate::input::gameplay::Dispatcher>().town.view;
             for _ in 0..turns.unsigned_abs().min(4) {
                 view.turn(turns.signum());
+            }
+            Ok(Pending::Instant)
+        }
+        Command::CameraZoom { height } => {
+            if !height.is_finite() {
+                return Err("A zoom is a height in meters".into());
+            }
+            let out = crate::effects::zoom_out(world.get_resource::<crate::scene_view::SceneView>());
+            // No camera without a renderer: nothing to zoom.
+            let mut rigs = world.query::<&mut crate::effects::CameraRig>();
+            for mut rig in rigs.iter_mut(world) {
+                rig.zoom = height.clamp(voxel_assets::ZOOM_IN, out);
             }
             Ok(Pending::Instant)
         }

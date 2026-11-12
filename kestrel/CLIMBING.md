@@ -25,7 +25,7 @@ regions reached by hash, streaming in and out.
 
 - The volume: 1 × 1 × 0.5 m cells, each column stored as its runs of
   solid cells (`volume.rs`), so air costs nothing. Scenes reach 16 m below
-  zero to 32 m above (`LAYOUT_LAYERS`).
+  zero to 32 m above (`LAYOUT_LAYERS`; 64 m since CL.1).
 - Walking off a ledge falls like a jump's way down; falls don't hurt.
   Walls block; paths never step down more than a layer.
 - The camera is orthographic at a fixed pitch, zoom 3–26, and rotates with
@@ -109,6 +109,35 @@ regions reached by hash, streaming in and out.
   a hash per region combined in a tree, streaming regions in and out, fog
   in regions, and what the sim runs far from players. The study becomes
   its own design page.
+
+## The Climbing Gym (CL.1)
+
+Scene `climbing-gym` (`app/assets/levels/climbing_gym.ron`, the 16th in
+the scene list: F4 steps to it, or `--scene climbing-gym`), 128 m across
+(extent 64). The scene file's comments name each feature in tiles (x
+east, z south) and layers. The sun shines from the south-west, so the faces
+that matter most face south or west, in the light; east and north faces
+stand in shadow, near black:
+
+| Feature | Where (tiles) | Height |
+| --- | --- | --- |
+| The summit; its north face, and its south face from x -10 to -5 | x -10..10, z -20..0 | 40 m |
+| The west face, the full 40 m: three pitches of about 13.5 m, a 2 m ledge between each | ledges at x -14..-13 (13.5 m) and x -12..-11 (27 m) | 40 m |
+| The south shoulder's face | x -4..10, z 1..8 | 20 m |
+| The inside corner: the shoulder's west face meets the summit's south face | x -5..-4, z 0..1 | 20 m |
+| The chimney: a slot 2 m wide, 6 m deep, open to the sky | x 3..4, z 3..8 | 20 m |
+| The east wing's east and south faces (over it the summit's east face, 30 m, no ledge) | x 11..22, z -20..6 | 10 m |
+| The low step's south and east faces | x 11..22, z 7..14 | 5 m |
+| The overhang: a roof 4 m out from the wing's east face, a 7 m ceiling under it | x 23..26, z -14..-6 | 7 to 10 m |
+| Pillars, 2 x 2 tiles | x 24, 30, 36; z 20..21 | 5, 10, 15 m |
+
+The elder spawns on the flat at (28, 26), by the pillars; no ghouls or
+sprites. The scene's `zoom_out: Some(80.0)` lets the view zoom out to 80 m
+(the usual is 26), and the camera stands four times further back so the
+mountain never comes in front of it; its `TurningView` feature turns the
+view with Z and C (the D-pad's left and right) as in a town. Demo:
+`//kestrel/app:climbing_gym_demo` (and `_video`), walking round the
+mountain while the view turns and zooms.
 
 ## Consequences
 

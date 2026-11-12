@@ -178,10 +178,24 @@ pub fn compute(key: Key, size: i32, opaque: impl Fn((i32, i32)) -> bool) -> Sigh
     compute_with(key, size, opaque, |_| false)
 }
 
+/// The fewest layers over the floor a roof stands for the view to count
+/// the ground under it as under the sky ([`lit`]): 5 m. Tunnels and caves
+/// are lower (3 m); an overhang this high (the Climbing Gym's, 7 m) lets
+/// the sky in from the side, so standing under it is not inside.
+pub const HIGH_ROOF: i32 = 10;
+
+/// Whether `tile` reads as under the sky in the view from the eye over
+/// floor layer `floor`: [`open`], or clear at the eye with its roof at
+/// least [`HIGH_ROOF`] layers over that floor.
+pub fn lit(volume: &sim::volume::Volume, tile: (i32, i32), floor: i32) -> bool {
+    open(volume, tile, floor)
+        || (!volume.is_solid(tile, floor + EYE) && volume.ceiling(tile, floor + EYE).is_some_and(|roof| roof >= floor + HIGH_ROOF))
+}
+
 /// The volume's grid round `key` (its tile and floor): [`blocks`] and
-/// [`open`] over [`WINDOW`].
+/// [`lit`] over [`WINDOW`].
 pub fn of_volume(volume: &sim::volume::Volume, key: Key) -> Sight {
-    compute_with(key, WINDOW, |t| blocks(volume, t, key.floor), |t| open(volume, t, key.floor))
+    compute_with(key, WINDOW, |t| blocks(volume, t, key.floor), |t| lit(volume, t, key.floor))
 }
 
 /// The visibility round `key.tile` over a `size` window, with `opaque`
@@ -518,6 +532,21 @@ mod tests {
             .collect::<Vec<_>>()
             .join("
 ")
+    }
+
+    /// Under the Climbing Gym's overhang (a roof 7 m up, open on three
+    /// sides) the view stays outside, and the ground under it is lit by the
+    /// sky; a tunnel's 3 m roof still goes inside.
+    #[test]
+    fn under_a_high_overhang_the_view_stays_outside() {
+        let pack = voxel_assets::ScenePack::decode(climbing_gym::PACK_BYTES).expect("the Climbing Gym pack");
+        let volume = pack.scene.volume.as_ref().expect("a volume").build();
+        assert_eq!(volume.ceiling((25, -10), 0), Some(14), "the overhang, 7 m up");
+        let s = of_volume(&volume, Key { tile: (25, -10), floor: 0, revision: 0, light: 0 });
+        assert!(!s.deep, "under the overhang");
+        assert_eq!(s.open((25, -10)), 1.0, "lit by the sky");
+        assert!(!lit(&volume, (24, -10), 14), "in the overhang's rock");
+        assert!(deep(&tunnel_lab(), (12, 0), 0), "in the Tunnel Lab's tunnel");
     }
 
     #[test]
