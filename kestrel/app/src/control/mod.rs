@@ -293,6 +293,13 @@ fn sprite_job(s: &sim::settlement::Settlement, job: Option<&str>) -> Result<sim:
     })
 }
 /// The local player's avatar index.
+/// A scripted guest's player: 1 to 8 (the host is 0).
+fn guest_player(guest: u32) -> Result<sim::PlayerId, String> {
+    if !(1..=8).contains(&guest) {
+        return Err("A guest is player 1 to 8".into());
+    }
+    Ok(sim::PlayerId(guest))
+}
 fn player(world: &World) -> Option<u16> {
     world.get_resource::<SessionService>()?.player()
 }
@@ -577,6 +584,27 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         Command::Board => {
             let agent = player(world).ok_or("No player")?;
             send(world, CommandKind::Board { agent });
+            Ok(Pending::Applied)
+        }
+        Command::GuestJoin { guest } => {
+            let player = guest_player(*guest)?;
+            world.resource_mut::<SessionService>().command_as(player, CommandKind::Join)?;
+            Ok(Pending::Applied)
+        }
+        Command::GuestWalk { guest, position } => {
+            let player = guest_player(*guest)?;
+            let goal = point(*position)?;
+            let mut service = world.resource_mut::<SessionService>();
+            let agent = service.settlement().and_then(|s| s.avatar_of(player)).ok_or("That guest hasn't joined")?;
+            let target = service.to_sim(goal);
+            service.command_as(player, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::GoTo { target, run: false } })?;
+            Ok(Pending::Applied)
+        }
+        Command::GuestBoard { guest } => {
+            let player = guest_player(*guest)?;
+            let mut service = world.resource_mut::<SessionService>();
+            let agent = service.settlement().and_then(|s| s.avatar_of(player)).ok_or("That guest hasn't joined")?;
+            service.command_as(player, CommandKind::Board { agent })?;
             Ok(Pending::Applied)
         }
         Command::Drive { direction, run } => {

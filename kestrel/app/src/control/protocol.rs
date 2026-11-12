@@ -167,6 +167,22 @@ pub enum Command {
         #[serde(default)]
         run: bool,
     },
+    /// Joins a scripted guest, player `guest` (1 to 8), on a host: they get
+    /// an elder of their own beside the spawn, as a joining client does.
+    GuestJoin {
+        guest: u32,
+    },
+    /// Walks guest `guest`'s elder to a point (arena x and z) along a
+    /// planned route. Done at once; wait for them to get there.
+    GuestWalk {
+        guest: u32,
+        position: [f32; 2],
+    },
+    /// Guest `guest` presses G: climbs into the nearest vehicle's free seat
+    /// (a crawler's deck, with the cab taken), or out of theirs.
+    GuestBoard {
+        guest: u32,
+    },
     /// Digs out a layer under the player, in a digging scene.
     Dig,
     /// In a volume scene, digs the tile in front: `"Level"` (the default),

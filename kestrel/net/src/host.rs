@@ -271,6 +271,13 @@ impl<T: Transport> Host<T> {
         self.host_filed = file(&mut self.open, tick, Command { player: HOST_PLAYER, kind });
     }
 
+    /// Schedules a command from `player`, as if a client had sent it, in
+    /// order with the host's own: a demo script's scripted guests.
+    pub fn queue_as(&mut self, player: PlayerId, kind: CommandKind) {
+        let tick = self.sim.world().tick().max(self.host_filed);
+        self.host_filed = file(&mut self.open, tick, Command { player, kind });
+    }
+
     /// Commands the host queued that haven't been simulated yet.
     pub fn pending_inputs(&self) -> u64 {
         self.open.values().flatten().filter(|c| c.player == HOST_PLAYER).count() as u64

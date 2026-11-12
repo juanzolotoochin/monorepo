@@ -196,16 +196,17 @@ pub(super) fn walk_route_at(position: &mut FxVec2, height: &mut Fx, route: &mut 
 /// else along its 3D path (`Threat::chase`), planned again when its
 /// backoff allows: every `follow::REPLAN_TICKS`, or, after a plan that
 /// didn't reach, longer (meanwhile it waits at the path's end, as close as
-/// it gets).
+/// it gets). Both go round the crawlers' feet (`crawler_feet`, CR.5).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx, tick: u64, terrain: &Terrain, light: &LightGrid) {
+pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx, tick: u64, terrain: &Terrain, light: &LightGrid, crawler_feet: &[(FxVec2, Fx)]) {
     let same = (feet - t.height).abs() <= super::combat::FLOOR_REACH;
     let gap = distance(t.position, to);
     if same && gap <= stop {
         t.chase.clear();
         return;
     }
-    let straight = || terrain.clear(t.position, to, WALK_CLEARANCE) && terrain.walk_at(t.position, approach(t.position, to, stop), t.height, WALK_CLEARANCE).is_some();
+    let round = super::crawler::feet_in_the_way(crawler_feet, terrain, t.position, t.height, WALK_CLEARANCE);
+    let straight = || terrain.clear_with(t.position, to, WALK_CLEARANCE, &round) && terrain.walk_at(t.position, approach(t.position, to, stop), t.height, WALK_CLEARANCE).is_some();
     if same && straight() {
         let next = t.position + (to - t.position) * (step.min(gap - stop) / gap);
         if let Some(z) = terrain.walk_at(t.position, next, t.height, WALK_CLEARANCE) {
@@ -219,7 +220,7 @@ pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx,
     }
     if t.backoff.due(tick) {
         let shun = shun(terrain, light);
-        let plan = nav::path_toward_with(terrain, t.position, t.height, to, Some(feet), WALK_CLEARANCE, &[], shun.as_deref());
+        let plan = nav::path_toward_with(terrain, t.position, t.height, to, Some(feet), WALK_CLEARANCE, &round, shun.as_deref());
         t.backoff.planned(tick, plan.reached, super::follow::REPLAN_TICKS);
         t.chase = plan.route.into_iter().map(|(p, _)| p).collect();
     }
@@ -236,9 +237,10 @@ pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx,
 /// `z`, to `target` on its top floor (`nav::path_toward_at`), or as close
 /// as it gets, and whether it gets there. Lantern light costs it more
 /// (`shun`).
-pub(super) fn route_home_at(terrain: &Terrain, light: &LightGrid, from: FxVec2, z: Fx, target: FxVec2) -> (Vec<FxVec2>, bool) {
+/// It goes round `extra`: a crawler's feet (CR.5), none for a wave's route.
+pub(super) fn route_home_at(terrain: &Terrain, light: &LightGrid, from: FxVec2, z: Fx, target: FxVec2, extra: &[crate::terrain::Disc]) -> (Vec<FxVec2>, bool) {
     let shun = shun(terrain, light);
-    let plan = nav::path_toward_with(terrain, from, z, target, Some(terrain.height(target)), WALK_CLEARANCE, &[], shun.as_deref());
+    let plan = nav::path_toward_with(terrain, from, z, target, Some(terrain.height(target)), WALK_CLEARANCE, extra, shun.as_deref());
     (plan.route.into_iter().map(|(p, _)| p).collect(), plan.reached)
 }
 
@@ -518,7 +520,12 @@ impl Settlement {
     fn replan_route(&mut self, i: usize, terrain: &Terrain) {
         let t = &self.threats[i];
         let Some(target) = self.waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied()) else { return };
-        let (route, reaches) = if terrain.volume.is_some() { route_home_at(terrain, &self.light, t.position, t.height, target) } else { route_home(terrain, t.position, target) };
+        let (route, reaches) = if terrain.volume.is_some() {
+            let feet = super::crawler::feet_in_the_way(&super::crawler::footings(&self.vehicles), terrain, t.position, t.height, WALK_CLEARANCE);
+            route_home_at(terrain, &self.light, t.position, t.height, target, &feet)
+        } else {
+            route_home(terrain, t.position, target)
+        };
         if !route.is_empty() {
             self.threats[i].route = route;
             self.threats[i].stranded = !reaches;

@@ -1,5 +1,9 @@
 # Vehicles
 
+The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
+(decisions C1–C12). Its tasks CR.1–CR.6 are done (see Done); what's left
+of it is in the open entries below.
+
 ## Collide rovers with bodies
 
 - **Status:** open
@@ -19,7 +23,7 @@
 ## Show a driver seated, and a boarding prompt
 
 - **Status:** open
-- **Why:** the driver stands at the seat in the idle pose, and nothing tells a player that G climbs in.
+- **Why:** the driver (and a crawler's riders, CR.4) stands at the seat in the idle pose, and nothing tells a player that G climbs in.
 - **What to do:** add a seated pose to the rig while `AvatarState::driving` is set. Show "G: DRIVE" in reach of a free rover, as the repair prompt does.
 - **Where:** `kestrel/app/src/rig.rs`, `scene.rs` (HUD prompts), `vehicles.rs`.
 - **Found in:** the vehicle prototype.
@@ -28,8 +32,656 @@
 
 - **Status:** open
 - **Why:** `app/src/vehicles.rs` builds a fixed mesh, ignoring the character's `view.skin` and the scene's style.
-- **What to do:** let a style supply the `rover` skin (chassis and wheel parts), with the built-in mesh as a fallback.
+- **What to do:** let a style supply the `rover` skin (chassis and wheel parts), with the built-in mesh as a fallback. The crawler's rig (`app/actors/crawler.ron`) is built in the same way: a style's `crawler` skin could re-dress its pieces by finish.
 - **Where:** `kestrel/app/src/vehicles.rs`, `style.rs`.
 - **Found in:** the vehicle prototype.
 
+## Crawler feet on dug or filled floors
+
+- **Status:** open
+- **Why:** a planted foot keeps the floor it landed on; digging or
+  filling under it (the Tunnel Lab, the town) leaves it standing on air
+  or in stone, and `validate_footholds` would fail.
+- **What to do:** in `crawler::self_update`, re-read each planted foot's
+  floor; a foot that lost it lifts (or the crawler stops), and one whose
+  floor rose steps up if within `step`.
+- **Where:** `kestrel/sim/src/settlement/crawler.rs`.
+- **Found in:** CR.2 of the crawler.
+
+## Predict a joined pilot's crawler feet
+
+- **Status:** open
+- **Why:** on a joined client the pilot's body is drawn predicted (ahead
+  of the confirmed world) but its feet come from the confirmed ticks, so
+  a swing starts a round trip late under a body already moving.
+- **What to do:** keep the replay's vehicle (`AvatarReplay::vehicle`)
+  per predicted tick in `prediction::replay` and `DrawnState`, and draw
+  the local pilot's feet from it.
+- **Where:** `kestrel/app/src/prediction.rs`, `vehicles.rs`.
+- **Found in:** CR.3 of the crawler.
+
+## Predicted climb-out reads the confirmed vehicle
+
+- **Status:** open
+- **Why:** `AvatarReplay::apply` builds its view from the confirmed
+  settlement, so a predicted G off a moving vehicle picks its exit spot
+  beside where the vehicle was confirmed, not beside the replay's copy;
+  the sim then puts the elder beside where it is, and the view snaps by
+  the distance it moved in a round trip.
+- **What to do:** let the replay's view read its own vehicle copy (a
+  `Cow` of `vehicles` with the copy in place) for the seated branch of
+  `avatar::act`.
+- **Where:** `kestrel/sim/src/settlement/prediction.rs`, `action.rs`
+  (`View::vehicles`).
+- **Found in:** CR.4 of the crawler.
+
+## Riders climbing down together share a spot
+
+- **Status:** open
+- **Why:** climbing down reads no agents (`action::View` has none), so
+  two elders pressing G on one tick land on the same spot when one's own
+  spot is blocked and they fall back to the same one, overlapping until
+  bodies separate. Each seat has its own first spot, so it's rare.
+- **What to do:** pick the spot in stage 5 with the other elders known,
+  or skip spots taken this tick (a message, as boarding is).
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`exit_spot`),
+  `avatar.rs`.
+- **Found in:** CR.4 of the crawler.
+
+## Walking into a crawler's foot by hand
+
+- **Status:** open
+- **Why:** planned routes go round a crawler's planted feet (CR.5), but an
+  elder walking with the stick, a ghoul walking its wave's route or
+  steering straight at a quarry outside a volume walks through a foot's
+  post.
+- **What to do:** treat planted feet as discs in the avatar's step
+  (`avatar::step`, as `Terrain::clear` blocks obstacles) and in a threat's
+  `walk_route_at`/`steer`; or push bodies out of them in stage 2 from last
+  tick's feet. A wave's route, planned once for all its enemies, could
+  replan when it meets one.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `chase.rs`,
+  `combat.rs` (`follow_route`).
+- **Found in:** CR.5 of the crawler.
+
+## Predicted routes near a crawler's feet
+
+- **Status:** open
+- **Why:** an elder's click-to-move route goes round the crawlers' feet
+  (CR.5) as `action::View::vehicles` has them. A joined client's replay
+  plans with the confirmed vehicles, the sim with the tick's own, so a
+  route planned near a walking crawler can differ by a foot's step and the
+  drawn elder snaps when the confirmed route arrives. A shove isn't
+  predicted either: the local elder is drawn on the spot until the
+  confirmed shove reaches them.
+- **What to do:** plan with the replay's own vehicle copy where it has one
+  (as "Predicted climb-out reads the confirmed vehicle"), and let the
+  replay apply a confirmed `FootLands` it can see coming (a swing whose
+  landing spot is under the elder).
+- **Where:** `kestrel/sim/src/settlement/prediction.rs`, `avatar.rs`
+  (`set_intent`).
+- **Found in:** CR.5 of the crawler.
+
+## Crawler locks beside a gap's end
+
+- **Status:** open
+- **Why:** the rules that free a crawler held at a gap (CR.6) move it along
+  its heading only. A path that turned it beside the pit's south end, with
+  a foot stepped round the end onto the far rim and its resting spot over
+  the pit, stalled at 167° of a 180° turn (seen before the last of those
+  rules; not checked since). A foot held sideways of the heading may still
+  lock it.
+- **What to do:** a soak that drives at the gaps' ends and edges on
+  purpose; if it locks, let the body step sideways toward the held feet
+  (or lift the held foot back across when it can't reach its rest).
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`over_a_gap`,
+  `fits`, `foothold`), `crawler_lab_tests.rs`.
+- **Found in:** CR.6 of the crawler.
+
+## Vehicles in the demo trace
+
+- **Status:** open
+- **Why:** a demo's frame trace (`settlement.simulation`) has agents and
+  threats but no vehicles, so routing the crawler demo read the pilot's
+  position for the crawler's and couldn't see its feet.
+- **What to do:** add each vehicle's position, heading, speed and (for a
+  crawler) feet to `settlement::snapshot`.
+- **Where:** `kestrel/app/src/settlement.rs` (`snapshot`).
+- **Found in:** CR.6 of the crawler.
+
+## The Crawler Lab's HUD
+
+- **Status:** open
+- **Why:** the lab shows the settlement's base, wave and pack lines and a
+  stock help line that don't apply to it (CR.1).
+- **What to do:** hide them in scenes without a base, or give the lab its
+  own help line (G boards, run trots).
+- **Where:** `kestrel/app/src/settlement.rs`, `scene.rs`.
+- **Found in:** CR.1 of the crawler.
+
 ## Done
+
+## CR.6 Soak, tuning and demo
+
+- **Status:** done (branch `kestrel-crawler`, PR to come)
+- **Why:** the prototype is reviewed by video.
+- **What to do:** a soak in the lab (driving randomly for minutes,
+  `validate` every tick); tune speeds and the gait; a demo video crossing
+  the terraces, the step, the trench and the moat, stopping at the wide
+  pit and the cliff, stomping a ghoul and carrying riders; the full suite;
+  a `docs/test-time.md` row; `docs/vehicles.md` and `CRAWLER.md`'s status.
+- **Where:** sim tests, `app/demos/`, docs.
+- **Found in:** crawler design.
+- **Tests:** the soak; the full suite.
+- **Done:** soak: `crawler_lab_tests::four_minutes_driving_with_riders_among_ghouls_validates`
+  (and `half_an_hour_..._validates`, `#[ignore]`d, run once) on
+  `crawler_lab_with_guests`: the pilot and three riders board, a fifth
+  elder stays on the ground; the wave sends a ghoul every 4 s; the pilot
+  walks, trots, turns in place either way, backs, heads for the lab's
+  middle or steers at random, 1 to 5 s each; every 1.5 s a ghoul (or,
+  every third time, the grounded elder) is put on a foot's landing spot a
+  tick before it lands. Every tick: `validate`, `validate_footholds`, the
+  pilot aboard, the riders in their places, every `Event::Hit` a stomp and
+  `combat.kills` equal to the stomp kills. Four minutes: 461 lifts, 60 of
+  60 ghouls put under a foot stomped, 29 shoves; half an hour: 3574 lifts,
+  450 of 450, 221 shoves (about 2 s of test time). Tuning: no speed or gait
+  change; the turn beside a pit and a lock astride the moat's edge, found
+  routing the demo, are fixed (see "Crawler turns in place beside a pit",
+  Done). Demo `crawler_lab.json` (3405 frames, `max_frames` 3600): the pilot and three guest
+  riders (see "Guests in demo scripts", Done) board, walk south over the
+  moat onto the island, turn and walk east off it, north-north-east and up
+  the plateau's 1.5 m south face, trot west down the terraces (stomping the
+  third ghoul about frame 1800 near (2.9, 4.2)) and across the trench,
+  stop at the pit, turn north beside it, trot north along it and walk east
+  into the mesa's cliff, where it stops; the pilot climbs down. Video and
+  frames reviewed (`cr6_demo_small.mp4`, `cr6_*.png`). Docs:
+  `docs/vehicles.md` (steering, footholds, the soak, the demo),
+  `CRAWLER.md` (done; "What changed versus the design"),
+  `todo/playtest-review.md` ("Play the crawler").
+- **Notes from CR.5:** feet shove and stomp (`crawler::read_footfalls`,
+  `Settlement::foot_lands`, a `FootLands` message, save format 49).
+  Tuning knobs: `STOMP_DAMAGE` (4), `STOMP_KNOCKBACK` (4 m/s),
+  `STOMP_STAGGER` (0.4 s) and `SHOVE_GAP` (0.1 m) in `crawler.rs`; the
+  view's dust in `vehicles::footfalls` (`STOMP_DUST`, `SHOVE_DUST`,
+  `DUST_RING`). The lab's ghouls walk the diagonal from the south-east
+  corner past the parked crawler at 0.6 m/s; the demo as it stands
+  stomps two of them on its north-east leg (frames 674 and 818, about
+  (16.8, 11.9) and (20.1, 14.7)), and the third walks on to the corner.
+  Retuning the gait or the route can lose them. A soak with ghouls under the feet now exercises the stomp: validate
+  every tick then, and check `combat.kills`. `crawler_feet_tests` has the
+  shove, stomp, among-bodies, seated and path tests; its
+  `put_under_a_foot` puts anything on a landing spot a tick before.
+- **Notes from CR.4:** riders need other players: a demo script drives
+  only the local player (`control::protocol::Script`), so carrying riders
+  in the demo needs "Guests in demo scripts" first, or a video from a
+  hosted session with joined clients. The soak could seat riders with
+  `CommandKind::Join` and `Board` in the sim (`crawler_lab_tests`'s
+  `crawler_lab_with_guests` puts four guests beside it). Save format is
+  48. `docs/test-time.md` has no CR.4 row; add it with CR.6's.
+- **Notes from CR.3:** turning in place right after stopping at the pit
+  stalls (the body won't turn: a front foot's turned spot is over the pit
+  edge); the demo backs off 5 s first, and a test path that backed 3 s
+  still stalled at 41°. See "Crawler turns in place beside a pit". The
+  demo now climbs the plateau's south face (toward the camera; the north
+  face can't be seen from the follow camera) and ends turning south and
+  trotting, about 100 s. Tuning the gait or `lift` changes the view's
+  arcs too; the
+  rig's lengths (`actors/crawler.ron`) are checked against `reach` in
+  `crawler::tests`.
+- **Notes from CR.2:** `crawler_lab_tests::a_minute_driving_round_the_lab_validates`
+  is the short soak (random sticks, `validate` and `validate_footholds`
+  every tick); lengthen it. Tuning knobs: `WORKSPACE` (2 m) and `SETTLE`
+  in `crawler.rs`, the `CrawlerDef` gaits, and `vehicle.turn`,
+  `acceleration` and `lift` in `crawler.ron`. At a 25°/s turn or faster
+  the walk can't keep its feet within 2 m of rest and stutters. From
+  rest the body may stall a moment until the last leg of the wave steps.
+  The moat (2 m) is crossable like the trench; the lab's too-wide cases
+  are the 3 m pit and the 2 m cliff (no 1.6 m step can be built from
+  0.5 m layers). The demo's route is open-loop (held sticks for set
+  frames); retune it if speeds change.
+
+## Crawler turns in place beside a pit
+
+- **Status:** done (with CR.6, branch `kestrel-crawler`, PR to come)
+- **Why:** stopped with its front feet at the 3 m pit's edge, the crawler
+  turned in place (stick 90° off) doesn't turn at all, or turns a little
+  and stops, and a boost doesn't free it: the feet's turned resting spots
+  fall over the pit, no foothold is found, and the body can't turn on the
+  feet it has.
+- **What to do:** when the ideal spot has no foothold, try spots nearer
+  the body (or the body's side away from the gap) before staying down;
+  or let the turn walk the body back a little.
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`foothold`, `fits`).
+- **Found in:** CR.3 of the crawler (the demo's turn at the pit).
+- **Done:** two rules in `crawler.rs`. Footholds: with no foothold round
+  the ideal spot, `foothold` looks round the foot's resting spot (at
+  landing, then now) for one that brings it at least `SETTLE` nearer its
+  rest, so a foot beside a pit steps in toward the body instead of staying
+  put (and doesn't shuffle along the edge). Steering: stopped (speed not
+  positive) with a planted foot's resting spot over a gap
+  (`over_a_gap`: no floor within `step`) and the stick more than about 7°
+  off the heading (`TURN_NEAR`), it moves at half its reverse speed toward
+  the held feet as it turns: back off a pit ahead, on from a moat behind.
+  And `fits` lets a foot that came down past `WORKSPACE` come back in (it
+  only refused the body moving it further), which had locked the body.
+  Tests: `the_crawler_turns_in_place_beside_the_pit` (stopped at the pit,
+  it turns south or north within 12 s, backing off under 3 m, then walks
+  away along the edge; no foot ever down the pit) and
+  `the_crawler_walks_on_after_turning_by_the_moat` (CR.6's demo route,
+  which had locked it astride the moat's edge for good).
+
+## Guests in demo scripts
+
+- **Status:** done (with CR.6, branch `kestrel-crawler`, PR to come)
+- **Why:** a demo script (`app/demos/*.json`) drives only the local
+  player, so a demo can't show a crawler carrying riders (C9) or
+  anything else with several elders.
+- **What to do:** a script op that joins a scripted guest (a
+  `CommandKind::Join` under a new `PlayerId`) and ops that send that
+  guest's commands (walk, board), applied through the session like the
+  local player's.
+- **Where:** `kestrel/app/src/control/protocol.rs`, `control/mod.rs`,
+  `lockstep.rs`.
+- **Found in:** CR.4 of the crawler.
+- **Done:** three script ops (`control::protocol::Command`):
+  `guest_join { guest }` joins player `guest` (1 to 8), `guest_walk
+  { guest, position }` sends their elder to a point along a planned route,
+  `guest_board { guest }` presses G for them. A host files them through
+  `net::Host::queue_as` (`session::Session::queue_as`,
+  `SessionService::command_as`) in order with its own commands; a client
+  refuses them ("Guests need a host"). The crawler demo seats three riders
+  with them. No other script verbs for guests yet (strike, dig, carry).
+
+## CR.5 Feet and bodies
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C10: footfalls matter.
+- **What to do:** a landing foot shoves bodies off its spot (a message,
+  applied in stage 5 like knockback) and a ghoul under it takes heavy
+  damage. Bodies path round planted feet. Ghouls don't attack it yet.
+- **Where:** `sim/src/settlement/vehicle.rs`, `combat.rs`, `messages.rs`.
+- **Found in:** crawler design.
+- **Tests:** a shove; a stomp; never a foot on an elder or sprite.
+- **Done:** a foot coming down shoves and stomps (C10).
+  `crawler::self_update` reports which feet came down this tick;
+  `Settlement::vehicles_self_update` keeps them in `Settlement::landings`
+  (not saved, emptied in housekeeping); stage 3
+  (`Settlement::read_footfalls`) lists under each foot the agents (alive,
+  not seated, not inside a building) and threats within the foot's 0.4 m
+  (`FOOT_RADIUS`) plus their radius whose feet are within 1 m of its floor
+  (any height outside a volume), as a `FootLands` message, a new late
+  queue (hashed only when not empty), so the save format is 49 (the
+  pending messages' queues). Stage 5 (`Settlement::foot_lands`, after the
+  threats' swings, before breaches) checks each again: an agent is put
+  just clear of the foot, 0.1 m past touching (`SHOVE_GAP`), away from it
+  (from the crawler's middle if it stood on the spot itself), or turned by
+  eighths of a turn, in the arena, clear of discs, rock and every foot, on
+  a floor a walk from where it stood reaches (`Terrain::walk_at`), with
+  its feet's height set there; an elder shoved stops digging; with
+  nowhere to go it stays. A threat loses `STOMP_DAMAGE` (4, armor or not:
+  more than a ghoul's 2 or 3), dying at 0 as a strike's kill
+  (`Event::Hit` with the new `Impact::Stomp`, `combat.kills`), else thrown
+  off at 4 m/s and staggered 0.4 s. Then `Event::Footfall { shoved,
+  stomped }` for the view. Seated elders are skipped in stage 3 and stage
+  5; a foot still never picks a foothold on a standing elder, sprite or
+  hauler (`foothold`, unchanged). Paths: `crawler::feet_in_the_way` gives
+  a disc at every foot's spot (planted, or a swing's landing) level with
+  the walker, but one it already touches; an elder's click-to-move route
+  (`set_intent`, on foot; not a foot on the target), a ghoul's chase
+  (straight check and plan) and its route home when it replans
+  (`route_home_at` takes the discs; a wave's shared route doesn't), and
+  haulers' and sprites' traffic detours (`move_worker`'s nearby discs) go
+  round them. The body is overhead and blocks nothing. Ghouls don't
+  attack it. View (`vehicles::footfalls`): a stone-dust burst under every
+  foot that comes down and a step's sound; a shove adds a ring of three
+  bursts, a stomp a ring of six and the landing cue; the ghoul bleeds and
+  falls as any kill (`Impact::Stomp` in `legacy`). Tests
+  (`crawler_feet_tests`): a guest elder put on a landing spot a tick
+  before is shoved just clear, away, on the floor, `Footfall` (1, 0); a
+  2-hit-point ghoul there dies (`Impact::Stomp`, a kill), one with 10
+  lives at 6, staggered and thrown away from the foot; both the same on 1
+  and 4 threads and across a save made the tick before; walking south
+  among four elders and a sprite standing where a free walk's feet came
+  down, no foot lands on one and none is shoved, and it walks on; a foot
+  forced under the pilot and each rider lists none of them and a message
+  naming them moves nobody; an elder sent straight across a parked foot
+  walks round it (never nearer than touching) and gets there. Existing
+  crawler, prediction and determinism tests pass unchanged; the whole
+  `sim_test` passed with the golden unchanged (no golden scene has a
+  crawler), and `movement_test`, `save_test` and `determinism_test`
+  passed. The demo is unchanged: as it stands it stomps two of the wave's
+  ghouls on its north-east leg (frames 674 and 818); screenshots
+  `cr5_stomp_*.png` from it. See "Walking into a crawler's foot by hand"
+  and "Predicted routes near a crawler's feet".
+- **Notes from CR.4:** riders and the pilot are seated
+  (`Seat::Vehicle`, `Seat::Rider`) and so out of `crawler::standing`: a
+  stomp or shove must skip them too. An elder climbing down stands clear
+  of every foot's spot and swing landing (`crawler::exit_spot`) but not
+  of a foot that lifts later; the foothold then avoids them as a standing
+  body, as before.
+- **Notes from CR.3:** a landing's view is `crawler::swing_point` at
+  `t = 1`: the sole comes down the last 40% of the swing fast, so a stomp
+  effect (dust, a thud) fits the tick the `Swing` becomes planted. The
+  drawn foot's pad is 0.7 m across (the rig's foot pieces).
+- **Notes from CR.2:** `foothold` already refuses spots on standing
+  agents (`Standing`, radius + 0.4 m, within 1 m of the floor) and leaves
+  threats out of that list, so a stomp is a landing (a `Swing` becoming
+  planted in `crawler::self_update`) on a threat's spot. Stage 2 can't
+  write threats: emit a message there or read the landings in stage 3.
+  The bodies list is every agent, scanned per candidate spot; a town
+  with many agents may want a grid.
+- **Notes from CR.1:** the lab's ghouls are a timed wave of three
+  `ghoul_sacred_tree` (2 hit points, chase within 3 m, leash 5 m) from the
+  south-east corner to the north-west one (`crawler_lab_supply.ron`);
+  each breaches there and is gone, so a stomp test should catch one on
+  its way, or add a wave.
+
+## CR.4 Riders
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C9: a pilot and three riders.
+- **What to do:** four seats (cab and deck); G boards the nearest free one
+  (the cab first); riders ride seated and can't steer; G climbs down to a
+  free floor spot beside it. Prediction and saves as the rover's driver.
+- **Where:** `sim/src/settlement/vehicle.rs`, `avatar.rs`, the view.
+- **Found in:** crawler design.
+- **Tests:** four players board in order; a fifth can't; climbing down
+  beside it, never into a pit.
+- **Notes from CR.3:** the deck's top is the rig's y = 0
+  (`actors/crawler.ron`): the cab covers z 0.8 to 2.3 m and stands 1.3 m
+  over it, the helm is at z 0.6, the cargo deck (crates, rail) z -0.4 to
+  -2.9. Seats for riders want clear deck: around (±0.7, -0.3) or on the
+  crates; move pieces in the rig if needed. The camera pull keys on the
+  drawn avatar's seat being a crawler's (`vehicles::draw`); decide whether
+  riders get it too.
+- **Notes from CR.2:** riders seated on the deck stay out of
+  `crawler::standing` (it skips any avatar with a seat). Climbing down
+  must not put an elder under a foot about to land: the feet avoid
+  standing bodies only when they pick a foothold, at lift.
+- **Notes from CR.1:** the one seat today is the rover's: boarding reaches
+  `body.radius` (1.5 m, half the width) + the elder's + 0.8 m from the
+  middle, so only beside the long sides, not at the ends; the lab parks
+  it 2.5 m from the spawn for that. `exit_spot` puts the pilot
+  `radius + 0.47` m out: just clear of the sides, but its behind and in
+  front fallbacks land under the 6 m body. Make the seats and the exit
+  spots follow the body's box.
+- **Done:** four seats: the pilot's (`Seat::Vehicle`, at the helm on
+  the deck's middle, as before) and three riders' places
+  (`Seat::Rider { vehicle, place }`, appended to `Seat`, save format 48),
+  `crawler::RIDERS` from the middle: (-0.75, -0.7) and (-0.75, 0.7)
+  (along, across) in front of the crates, and (-2.4, 0) behind them.
+  `Settlement::board` reaches a crawler within `BOARD_REACH` (0.8 m) past
+  the elder's radius of its 6 x 3 m box (`crawler::box_distance_squared`),
+  from any side or end (the rover keeps its radius), and takes its free
+  seat (`free_seat`): the cab first, else the free place nearest the
+  elder (lower place on a tie); stage 5 seats in command order, so five
+  on one tick give a pilot, three riders and nobody. Housekeeping keeps
+  riders in place (`VehicleState::seat_at`), facing the crawler's way at
+  the deck's height; a rider's commands go through `avatar::act`'s seated
+  branch, so movement does nothing (only `Seat::vehicle`, the pilot's,
+  drives), and a crawler with riders but no pilot stands still. A rider
+  doesn't move to the cab when the pilot leaves: they climb down and
+  board again. Climbing down (`crawler::exit_spot`, for pilot and riders;
+  the rover's `exit_spot` is unchanged): around the box, 0.15 m past it
+  beyond the elder's radius; each seat's own spot first, so four climbing
+  down on one tick land apart (the pilot's beside the middle on the left,
+  a front rider's 1.5 m back on their side, the back rider's behind),
+  then the seat's side at the middle, 1.5 m back and 1.5 m forward, the
+  other side, behind and in front; in the arena and `Terrain::clear`,
+  at least foot radius + elder radius + 0.2 m from every foot's spot and every swing's
+  landing spot, and its floor (`footprint_near`) within 0.6 m of the
+  highest floor its feet stand on, so never into the trench even with a
+  foot down in it (a first cut used the nearest foot's floor and let a
+  pilot down into the trench beside a foot in it). None: the elder stays
+  aboard. `Settlement::validate` checks every seat holds one elder and a
+  rider sits on a crawler in a real place. Prediction: `AvatarReplay`
+  copies the vehicle the avatar is aboard (`Seat::aboard`), pilot or
+  rider; a rider's runs on its confirmed controls, as if the pilot held
+  them (exact until the pilot's next command arrives), and `vehicle()`
+  returns it for riders too. View: the rig's crates moved to the cargo
+  deck's middle (z -1.2 to -2.0, a small one at the back right) to clear
+  the places; a local rider's crawler is drawn from the rider's drawn
+  transform less their place (`vehicles::rider_offset`), as the pilot's
+  is; the control protocol's `seat` reports `{"vehicle", "rider"}` for a
+  rider. Camera: riders get the pull-back too (`PILOT_PULL` while aboard
+  a crawler, pilot or rider): they see what it steps over. Riders stand in
+  the idle pose, like the pilot (see "Show a driver seated, and a
+  boarding prompt"). Tests: `crawler_lab_tests`
+  `a_pilot_and_three_riders_board_and_a_fifth_cannot` (five on one tick;
+  riders in place every tick of a 5 s walk; their sticks steer nothing,
+  with the pilot aboard or gone), `riders_climb_down_beside_it_on_the_ground`
+  (outside the box, on the ground, clear of the feet, the right-hand rider
+  on the right, the back one behind, all four apart), `climbing_down_never_goes_into_a_pit_or_under_a_foot`
+  (parked astride the trench's edge, a foot in it or past it: pilot and
+  left rider down on the right; in the sim too; a swing's landing spot
+  passed over), `riding_is_predicted_and_saved` (a rider's replay equals
+  the sim over 300 ticks while the pilot holds the stick; a postcard
+  round trip with riders continues with equal hashes); save
+  `a_crawler_saved_with_riders_aboard_continues` (`write`/`read`, same
+  bytes again, same steps after); app
+  `crawler::tests::the_rig_keeps_the_riders_places_clear` and
+  `vehicles::tests::a_riders_offset_matches_their_seat`. Sim golden
+  unchanged (no golden scene has a vehicle; the whole `sim_test` passed). No
+  screenshots: demo scripts drive only the local player, so a demo can't
+  seat riders (see "Guests in demo scripts").
+
+## CR.3 Legs, IK and the camera
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C8, C12: the legs must read.
+- **What to do:** a rig as data (`app/actors/crawler.ron`): body, cab,
+  hips, knees, shins and feet as boxes and cylinders. The view solves each
+  leg as a two-bone IK with the foot kept vertical and the knee high (C8),
+  swings feet along arcs between the sim's spots, eases the body to its
+  height and tilt, and interpolates other players' crawlers. The camera
+  pulls back while piloting.
+- **Where:** `app/src/vehicles.rs` (or `app/src/crawler.rs`),
+  `app/actors/`, the camera.
+- **Found in:** crawler design.
+- **Tests:** the IK reaches every planted foot with the knee over the hip
+  line; screenshots and a short video walking the lab.
+- **Done:** the rig is data, `app/actors/crawler.ron`, read by
+  `app/src/crawler.rs` (`Rig`, built in, compiled with the app): the
+  body's pieces (boxes and cylinders, each `turn`ed by degrees, in the
+  deck's frame) and one leg's `hip` pieces and `thigh`, `shin` and `foot`
+  segments, each a length and pieces in its own frame (y along it, z to
+  the knee's side); the other legs mirror it, at the sim's `hip` offsets.
+  Finishes are the Brasswood palette's (timber, dark timber, brass, iron
+  darkened, leather, canvas, cloth, a lamp's glow). The body: a timber
+  hull hanging no lower than `BELLY`, a brass-edged plank deck, a prow
+  lamp, a timber cab with a window band, brass roof and iron stack on the
+  front half, the helm on the middle where the pilot stands, and a railed
+  cargo deck of crates under canvas behind. Legs: thigh 1.8 m, shin 3.4
+  m, foot 0.45 m (thigh and shin reach 5.2 m, past `reach` 4.5 m by the
+  soft zone; the shin nearly twice the thigh keeps the knee high).
+  `crawler::solve`: hip (on the deck) to the ankle `foot` over the sole,
+  the knee in the plane through hip and ankle on the side of up and a
+  little outward (`KNEE_OUT`), so it never flips; out of reach the leg
+  eases straight over `SOFT_REACH` (0.25 m) instead of snapping, and a too
+  near ankle is drawn as far as the folded leg goes. `swing_point`: the
+  sole rises in the first 40% of the swing to `lift` over the higher of
+  its two floors, crosses between 20% and 80% (smoothstep) and comes down
+  in the last 40%. `vehicles::draw_crawler` replaces the placeholder: the
+  body level at the sim's height (interpolated, or the pilot's drawn
+  transform for the local pilot as before; no bob, it read fine without),
+  each foot's sole interpolated between the last two ticks' states
+  (`foot_point` on each), and a foot whose spot jumps (faster than
+  `FOOT_JUMP`, 30 m/s: the sim aimed a waiting swing again) glides there,
+  the gap halving every 0.06 s. Camera: `Vehicles::pull` eases (1.6/s)
+  toward `PILOT_PULL` (1.4) while the drawn local avatar's seat is a
+  crawler and back to 1 after; `effects::camera_feedback` scales the
+  orthographic view's height by it. The pilot reads on the deck behind
+  the cab. Demo `crawler_lab.json`: it now climbs the plateau's south
+  face (the north face is hidden from the follow camera), and after
+  stopping at the pit it backs off 5 s, turns in place south and trots
+  south along the strip between trench and pit. Tests: `crawler::tests` (the rig loads, validates,
+  reaches past `reach`, hangs no lower than the belly, and rejects bad
+  lengths and pieces; the solve's sole on its target, upright, the knee
+  0.5 m over the hip and outward at rest, easing past reach without a
+  jump; in the lab, up and down the step, west across the trench,
+  trotting, and turning in place by the spawn, every planted foot reached
+  within 1 mm with the knee off the hip–ankle line toward up and out, the
+  knee over the hip itself for 98% of planted feet (not for a far rear
+  foot under a body raised by its front feet on the step), and each
+  swing's arc above the volume's top floor at 99 samples), `vehicles::tests`
+  (the pull's easing; in the Crawler Lab app, the camera pulls back to
+  `PILOT_PULL` piloting and eases in after climbing down).
+- **Notes from CR.2:** the sim's feet are `VehicleState::legs`
+  (`sim::settlement::crawler`): each foot's `spot` and `floor` (a tile's
+  level floor height), and while it swings its `Swing` (`to`, `floor`,
+  `progress` of the gait's `swing` ticks; at `progress == swing` it waits
+  for reach). Draw a swing from `spot` to `to` with `gait.lift` at the top
+  (the placeholder `draw_crawler` hops along a sine). The body is level at
+  `VehicleState::height` (its feet's level; the deck `deck` over it, the
+  hips at the deck); the sim eases it at `lift` (2.5 m/s), so ease it in
+  the view too. Feet aren't interpolated for other players' crawlers yet.
+  Ground under the body's box stays under its belly, 1.2 m under the deck
+  (`crawler::BELLY`); a rig hanging lower would clip the mesa's edge.
+- **Notes from CR.1:** `app/src/vehicles.rs` draws a crawler (a vehicle
+  whose character has a `crawler`) as a PLACEHOLDER: a timber box its
+  length and width hanging under the deck, a brass cab and rail on it,
+  and brass posts under the hips stretched to the ground
+  (`spawn_crawler`). Replace it; the wheel ground there now reads the
+  volume's floor as the sim does. The demo is `crawler_lab_demo`
+  (`app/demos/crawler_lab.json`).
+
+## CR.2 Gait and footholds in the sim
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C5–C7: the crawler walks on footholds the sim chooses.
+- **What to do:** in `Fx`, deterministic: four feet (planted spot and
+  floor, swing from and to, progress) and a gait clock; a wave walk at
+  walk and a diagonal trot at boost (C7); a foot lifts when it falls
+  behind and lands on the floor nearest its ideal spot that is within
+  reach, at most 1.5 m up or down and across at most 2 m of gap
+  (`Volume::floor_near`); never on an elder or sprite (C10). The body's
+  height and tilt follow the planted feet (level, C5). Turning in place
+  steps sideways; backing up reverses. With no foothold it stops. Saved
+  and hashed (save format up); `AvatarReplay` copies it.
+- **Where:** `sim/src/settlement/vehicle.rs` (or a new `crawler.rs`),
+  `sim/src/volume.rs`, `save/`.
+- **Found in:** crawler design.
+- **Tests:** the gait's feet down; crossing the step and the trench;
+  stopped by 1.6 m, the wide pit and the cliff; reach; determinism and
+  prediction replay; save round trip.
+- **Done:** `sim/src/settlement/crawler.rs`: `VehicleState::legs`
+  (`Legs`: four `Foot`s, each its spot and floor and a `Swing` to a spot
+  and floor with its progress, and the gait, its direction and clock),
+  set for a vehicle whose character has a `crawler` (`VehicleState::new`
+  parks its feet at `stance`, the clock a tick before the walk's first
+  lift); `vehicle::self_update_among` hands a crawler to
+  `crawler::self_update`, so `drive`, boarding and the seat are the
+  rover's. The stick walks within 60° of the heading, turns in place to
+  120° and backs up past it. Gait: the walk's wave (rear left, front
+  left, rear right, front right; four slices of `cycle`) and the trot's
+  diagonal pairs (two), each foot lifting as its slice starts (as it
+  ends, backing up: the wave reversed) for `swing` ticks; gait and
+  direction change only with every foot down (the clock maps by phase);
+  the clock runs while moving or a foot is out of place (more than 0.25 m
+  from where it would step) and holds while a swung foot waits for reach.
+  Footholds (`foothold`): the grid spot (0.25 m) nearest the ideal (its
+  `stance` spot as the body will be half a stance after landing, at the
+  speed it's making for) within 2 m (`WORKSPACE`) of its resting spot both
+  now and at landing, in horizontal reach of its hip at landing and with
+  a body height the other feet allow, on its tile's floor within `step` of
+  the floor it lifted from (nearest, no ceiling under the hip), with at
+  most `gap` of the way over tiles with no floor within `step` (measured
+  tile by tile, exactly) and no ground over the swing's top (`lift`), and
+  clear of every standing agent (`crawler::standing`: alive, not seated,
+  not inside; threats aren't, for CR.5's stomp). None: the foot stays
+  down. The body moves (and turns) only to poses where each planted foot
+  is in 3D reach of its hip and at least 1 m (`MIN_RISE`) under it at the
+  body's height, within `WORKSPACE` of its resting spot, and no ground
+  under the body's box is over its belly (1.2 m under the deck,
+  `BELLY`); otherwise it loses that speed. So a pit too wide holds a front
+  foot back until the body stops over the edge, the mesa's cliff stops
+  the body at its face, and backing off walks away. Body: level, no pitch
+  or roll (the placeholder draws it flat); its height eases at `lift`
+  (2.5 m/s now) toward the mean of its feet's floors (swinging feet's
+  landing floors), clamped low enough for feet coming down to reach and
+  high enough for its belly: walking off the 1.5 m step it sinks about
+  1 m with its front feet down. Tuning moved: `acceleration` 1.0 (from
+  1.5: the last foot of the wave steps 1.8 s after starting), `turn`
+  20°/s (from 35: turning in place keeps the feet within 2 m of rest),
+  `lift` 2.5. Prediction: `AvatarReplay` runs the driven crawler with the
+  confirmed settlement's standing bodies (exact while no body moves near
+  a foot). Save format 47. `Settlement::validate` checks every planted
+  foot in reach and under its hip and the feet up (one at a walk, a
+  diagonal pair at a trot); `Settlement::validate_footholds(terrain)`
+  checks they stand on floors (validate has no terrain). The view
+  (`vehicles::draw_crawler`) stands a post on each foot up to the deck, a
+  swinging foot hopping along its swing; the body box is 1.2 m deep, level
+  at the sim's height. Demo `crawler_lab.json` boards, turns, walks
+  north-east, up the plateau's north face, west down the terraces and
+  across the trench to the pit. Tests (`crawler_lab_tests`): the walk's
+  wave with one foot up and the trot's pairs, at full speed; up and down
+  the step (front feet up with rear down; sinking 0.5 m or more); across
+  the trench and stopped at the pit, then backing off; stopped at the
+  cliff; never on a body; turning in place (the body still, 150°+ in
+  8 s); backing on the reversed wave; prediction replay; determinism
+  across threads and a save made mid-step; a minute's random driving
+  validating every tick. Sim golden and headless hashes unchanged (no
+  golden scene has a vehicle).
+- **Notes from CR.1:** the tuning is `CrawlerDef` (`content::character`,
+  the `crawler:` section of `character/crawler.ron`): `hip` and `stance`
+  are the front right leg's offsets (`along` the heading, `across` to the
+  right), the others mirror them in `VehicleState::wheels` order (front
+  left, front right, rear left, rear right); `walk`/`trot` hold `cycle`,
+  `swing` (ticks) and `lift`. Today the crawler is a plain
+  `VehicleState` rolling on four points under its hips (the `crawler`
+  section sets `vehicle`'s wheelbase, track, climb = step and seat =
+  deck; the file may not write them), each reading the floor it rolls on
+  in a volume (`ground_under`: `Terrain::floor(p, wheel + climb)`). It
+  rolls up the plateau's 1.5 m face and stops at the mesa's 2 m cliff,
+  but a hip point drops into the 2 m-deep trench, the pit or the moat and
+  can't climb out, and it can't turn standing still (turning needs
+  rolling). Replace that model, keeping `drive`, boarding and the seat.
+  Layers are 0.5 m, so "1.6 m" can't be built: the lab's next height up
+  is the mesa's 2 m. A resting foot (`stance`) is 3.36 m from its hip, so
+  stepping down 1.5 m under a level body is 4.65 m, past the 4.5 m reach:
+  the body must sink with its feet, or tune `stance`/`reach`. Content
+  tests check the ranges; `CrawlerDef` joins `rules_hash` like
+  `vehicle`.
+
+## CR.1 The Crawler Lab and the crawler
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** the crawler needs a scene with every case and a definition.
+- **What to do:** a `crawler_lab` scene on a volume (C11), a
+  `character/crawler.ron` with its body, speeds and a crawler tuning
+  section, boarding with G, and a demo.
+- **Found in:** crawler design.
+- **Done:** scene `crawler-lab` (CRAWLER LAB / ROUGH GROUND, last in the
+  scene list: F4 steps to it), `app/assets/levels/crawler_lab.ron`: 64 m
+  of stone with three half-meter terraces up to a plateau at 1.5 m whose
+  north face is a single 1.5 m step, a mesa with a 2 m cliff, a trench
+  2 m wide and deep, a pit 3 m wide and deep, a dry moat 2 m wide round a
+  13 x 11 m island, and 9 m of ground between trench and pit. Its supply
+  (`crawler_lab_supply.ron`) has the elder and a timed wave of three
+  chasing `ghoul_sacred_tree` across the lab; the forest (Brasswood)
+  style draws them. `character/crawler.ron`: `brain: Vehicle`, radius
+  1.5, walk 1.6 m/s, run 3.2 m/s, and `crawler:` (`CrawlerDef`): 6 x 3 m,
+  deck 3 m, hip (2.4, 1.2), stance (3.0, 2.6), reach 4.5, step 1.5, gap
+  2, walk (144 frames a cycle, 33 a swing, 0.9 m lift), trot (60, 27,
+  0.6 m), validated (ranges, a hip on the body, a resting foot in reach,
+  four or two swings per cycle) and in `rules_hash`. Until CR.2 it rolls
+  like the rover on four points under its hips, the `crawler` section
+  setting `vehicle`'s wheelbase, track, climb (the step) and seat (the
+  deck); every vehicle's wheels now read the floor they roll on in a
+  volume scene (`ground_under`, so the rover is unchanged elsewhere). G
+  boards the one seat, on the deck, and climbs down beside it. The view
+  draws it as a placeholder box with a cab and posts
+  (`vehicles::spawn_crawler`). A volume is now drawn, and the built-in
+  deck hidden, without the Digging feature (`Digging::init`,
+  `SceneView`); the lab follows the elder with `CameraFollow` and can't
+  be dug. Demo `//kestrel/app:crawler_lab_demo` (`_video`). Tests:
+  `crawler_lab_tests` (every feature's height, the crawler parked in the
+  table with its legs and the ghouls coming, boarding, riding on the
+  deck and climbing down, rolling up the step but not the cliff),
+  content `the_crawler_has_its_legs_and_its_wheels_follow_them` and
+  `crawlers_are_validated`, the app's scene list and obstacles. Save
+  format unchanged; the character indices shift (`crawler` sorts first),
+  so the rules hash changed and the sim golden's state hashes moved
+  (behaviour lines unchanged, regenerated); headless hashes unchanged.
+  The HUD shows the settlement's base, wave and pack lines and a stock
+  help line that don't apply to the lab (CR.6 may hide them).

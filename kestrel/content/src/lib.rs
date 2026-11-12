@@ -149,6 +149,7 @@ struct MoverSimFile {
 
 /// The content shipped with the game, compiled into the binary.
 const BUILTIN: &[(&str, &str)] = &[
+    ("character/crawler.ron", include_str!("../data/character/crawler.ron")),
     ("character/elder.ron", include_str!("../data/character/elder.ron")),
     ("character/exosuit.ron", include_str!("../data/character/exosuit.ron")),
     ("character/exosuit_laser_pit.ron", include_str!("../data/character/exosuit_laser_pit.ron")),
@@ -292,6 +293,10 @@ fn rules_hash(names: &Names, rules: &Rules) -> u64 {
     .expect("encode rules");
     if vehicles.iter().any(Option::is_some) {
         bytes.extend(postcard::to_allocvec(&vehicles).expect("encode vehicles"));
+    }
+    let crawlers: Vec<_> = rules.characters.iter().map(|c| c.crawler).collect();
+    if crawlers.iter().any(Option::is_some) {
+        bytes.extend(postcard::to_allocvec(&crawlers).expect("encode crawlers"));
     }
     let chases: Vec<_> = rules.characters.iter().map(|c| c.chase).collect();
     if chases.iter().any(Option::is_some) {
@@ -608,6 +613,53 @@ mod tests {
         assert!(bad(&mining.replace("capacity: 6", "capacity: 0")).contains("sprite.mine.capacity"));
         assert!(bad(&mining.replace("dig: 540, ", "")).contains("sprite.mine.dig"));
         assert!(sprite_of("ghoul_forest").is_none());
+    }
+
+    const CRAWLER: &str = include_str!("../data/character/crawler.ron");
+
+    /// The crawler's legs (CRAWLER.md, C2, C5, C7) are data, and they set
+    /// the wheels it rolls on until it walks.
+    #[test]
+    fn the_crawler_has_its_legs_and_its_wheels_follow_them() {
+        use scenario::ticks_from_60hz;
+        let builtin = Content::builtin();
+        let def = &builtin.rules.characters[builtin.names.character_index("crawler").expect("the crawler") as usize];
+        assert_eq!(def.brain, character::Brain::Vehicle);
+        let crawler = def.crawler.expect("a crawler section");
+        assert_eq!((crawler.length, crawler.width, crawler.deck), (Fx::from_int(6), Fx::from_int(3), Fx::from_int(3)));
+        assert_eq!((crawler.reach, crawler.step, crawler.gap), (Fx::from_ratio(9, 2), Fx::from_ratio(3, 2), Fx::from_int(2)));
+        assert_eq!((crawler.walk.cycle, crawler.walk.swing), (ticks_from_60hz(144), ticks_from_60hz(33)));
+        assert!(crawler.walk.swing * 4 <= crawler.walk.cycle && crawler.trot.swing * 2 <= crawler.trot.cycle);
+        let vehicle = def.vehicle.expect("it drives as a vehicle");
+        assert_eq!((vehicle.wheelbase, vehicle.track), (crawler.hip.along * Fx::from_int(2), crawler.hip.across * Fx::from_int(2)));
+        assert_eq!((vehicle.climb, vehicle.seat), (crawler.step, crawler.deck));
+        let rover = builtin.names.character_index("rover").unwrap();
+        assert!(builtin.rules.characters[rover as usize].crawler.is_none(), "the rover rolls");
+    }
+
+    #[test]
+    fn crawlers_are_validated() {
+        let bad = |text: &str| characters(&[("character/x.ron", text)]).unwrap_err().message;
+        let edit = |from: &str, to: &str| {
+            assert!(CRAWLER.contains(from), "{from}");
+            bad(&CRAWLER.replace(from, to))
+        };
+        assert!(characters(&[("character/x.ron", CRAWLER)]).is_ok());
+        assert!(edit("length: 6.0, ", "").contains("crawler.length"));
+        assert!(edit("deck: 3.0", "deck: 7.0").contains("crawler.deck"));
+        assert!(edit("hip: (along: 2.4", "hip: (along: 3.4").contains("crawler.hip.along"), "a hip is on the body");
+        assert!(edit("stance: (along: 3.0", "stance: (along: 2.0").contains("crawler.stance"));
+        assert!(edit("reach: 4.5", "reach: 3.0").contains("crawler.reach"), "it can't reach the ground");
+        assert!(edit("step: 1.5", "step: 3.5").contains("crawler.step"));
+        assert!(edit("gap: 2.0", "gap: 5.0").contains("crawler.gap"));
+        assert!(edit("swing: 33", "swing: 37").contains("crawler.walk"), "four swings fit in a walk's cycle");
+        assert!(edit("swing: 27", "swing: 31").contains("crawler.trot"), "two in a trot's");
+        assert!(edit("swing: 33, lift: 0.9", "swing: 33, lift: 5.0").contains("walk.lift"));
+        // It sets the wheels; the file may not.
+        assert!(edit("turn: 20,", "turn: 20, climb: 1.0,").contains("vehicle.climb"));
+        // Only a vehicle walks.
+        let sprite = "(sim: (brain: Sprite, body: (radius: 0.22), movement: (walk: 1.6), crawler: (length: 6.0)), view: (skin: \"worker\"))";
+        assert!(bad(sprite).contains("only Vehicle"));
     }
 
     #[test]

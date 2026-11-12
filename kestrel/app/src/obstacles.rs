@@ -115,6 +115,7 @@ mod tests {
                 ("atlantis", 21, 0),
                 ("boulder-lab", 10, 0),
                 ("combat-arena", 0, 0),
+                ("crawler-lab", 0, 0),
                 ("dig-lab", 1, 0),
                 ("field", 0, 0),
                 ("forest-outpost", 0, 0),
