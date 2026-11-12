@@ -215,6 +215,12 @@ pub struct AvatarState {
     /// off any face with a full wheel for characters that don't climb.
     #[serde(default)]
     pub climbing: super::climb::Climbing,
+    /// The highest the feet have been in the fall under way, for a
+    /// climber (save format 48): set while `jump` is `Airborne`, kept on
+    /// the tick it lands for housekeeping to hurt it (`fall_housekeeping`,
+    /// K7), then cleared.
+    #[serde(default)]
+    pub fall_top: Option<Fx>,
 }
 
 /// Where a seated avatar sits (`AvatarState::seat`). Boarding enters the
@@ -296,6 +302,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
             avatar.flight = Flight::default();
             avatar.jump = JumpPhase::Grounded;
             avatar.climbing = super::climb::Climbing::default();
+            avatar.fall_top = None;
             body.velocity = FxVec2::ZERO;
             body.push = FxVec2::ZERO;
             avatar.intent = Some(Intent::Stop);
@@ -315,6 +322,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
     // On a face, climbing moves the avatar instead of walking.
     if let Some(climb) = def.climb.as_ref().filter(|_| avatar.climbing.climb.is_some()) {
         super::climb::step(body, avatar, tick, terrain, def, climb);
+        super::climb::track_fall(avatar, tick);
         return;
     }
     walk(body, avatar, tick, terrain, def);
@@ -327,6 +335,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
     }
     if let Some(climb) = def.climb.as_ref() {
         super::climb::reach(body, avatar, tick, terrain, def, climb);
+        super::climb::track_fall(avatar, tick);
     }
 }
 
@@ -683,6 +692,30 @@ impl Settlement {
         self.end_pile_job(agent, "You died. Haul canceled; cargo is retained.", "Haul canceled because the player died");
         self.restart_memory(terrain);
         true
+    }
+
+    /// Housekeeping: a climber that landed this tick from a fall of its
+    /// `safe_fall` or more is hurt (K7 of the climbing design,
+    /// `climb::fall_damage`), through `hurt_player`, so a fall that kills
+    /// ends what a killing blow does and the elder comes back at home.
+    /// Only where players have health (`Body::max_health`).
+    pub(crate) fn fall_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
+        for agent in 0..self.agents.len() {
+            let a = &self.agents[agent];
+            let Some(climb) = character_of(&self.characters, a).climb else { continue };
+            let Some(avatar) = a.avatar() else { continue };
+            let (JumpPhase::Landing { started }, Some(top)) = (avatar.jump, avatar.fall_top) else { continue };
+            if started != tick || a.body.max_health == 0 || !a.body.alive() {
+                continue;
+            }
+            let height = top - avatar.height;
+            let damage = super::climb::fall_damage(height, &climb);
+            if damage == 0 {
+                continue;
+            }
+            let killed = self.hurt_player(agent, damage, tick, terrain);
+            self.events.push(Event::Fell { agent: agent as AgentIx, height, damage, killed });
+        }
     }
 
     /// Holds and gives back carry jobs' units on their other side, in

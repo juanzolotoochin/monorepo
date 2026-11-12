@@ -374,6 +374,11 @@ pub struct Scene {
     /// looks at, so tall ground between them isn't cut off.
     #[serde(default)]
     pub zoom_out: Option<f32>,
+    /// The player's health in a scene without a scenario (a scenario sets
+    /// its own): without it nothing hurts the player there. The Climbing
+    /// Gym's, so its falls hurt and can kill (CL.3 of the climbing design).
+    #[serde(default)]
+    pub player_health: Option<u32>,
 }
 
 /// The farthest the camera zooms out in a scene without its own
@@ -747,6 +752,14 @@ impl ScenePack {
         if let Some(volume) = &self.scene.volume {
             validate_volume(&self.scene, volume)?;
         }
+        if let Some(health) = self.scene.player_health {
+            if self.scene.scenario.is_some() {
+                return Err("a scene with a scenario takes its player_health from the scenario".into());
+            }
+            if !(1..=100).contains(&health) {
+                return Err(format!("a scene's player_health is {health}, but must be from 1 to 100"));
+            }
+        }
         if let Some(zoom) = self.scene.zoom_out {
             if !(ZOOM_OUT..=MAX_ZOOM_OUT).contains(&zoom) {
                 return Err(format!("a scene's zoom_out is {zoom} m, but must be from {ZOOM_OUT} to {MAX_ZOOM_OUT}"));
@@ -940,6 +953,7 @@ mod tests {
                 lanterns: vec![],
                 glow: None,
                 zoom_out: None,
+                player_health: None,
                 volume: None,
                 walkers: vec![],
                 instances: vec![Instance {
@@ -999,6 +1013,7 @@ mod tests {
                 lanterns: vec![],
                 glow: None,
                 zoom_out: None,
+                player_health: None,
                 volume: None,
                 walkers: vec![],
                 terrain: Some(Terrain {

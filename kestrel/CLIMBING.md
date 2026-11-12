@@ -26,8 +26,9 @@ regions reached by hash, streaming in and out.
 - The volume: 1 × 1 × 0.5 m cells, each column stored as its runs of
   solid cells (`volume.rs`), so air costs nothing. Scenes reach 16 m below
   zero to 32 m above (`LAYOUT_LAYERS`; 64 m since CL.1).
-- Walking off a ledge falls like a jump's way down; falls don't hurt.
-  Walls block; paths never step down more than a layer.
+- Walking off a ledge falls like a jump's way down; falls don't hurt
+  (they do since CL.3, K7). Walls block; paths never step down more than
+  a layer.
 - The camera is orthographic at a fixed pitch, zoom 3–26, and rotates with
   Z/C. Underground, the ground over the head fades.
 - What doesn't scale to an open world: the volume is one sorted list of
@@ -88,6 +89,20 @@ regions reached by hash, streaming in and out.
 
 - No damage under 5 m, then 1 health per 2.5 m (the elder has 6), so about
   20 m kills. A dead elder comes back as today. Numbers in content.
+- Settled in CL.3: the numbers are on the elder's `climb` section
+  (`safe_fall: 5.0, fall_step: 2.5`, beside the fall's gravity), so a
+  character falls hurt exactly when it climbs. A fall is measured from its
+  highest point (a let-go's height, a lunge's top, a jump's apex) to the
+  floor it lands on: 5 m takes 1, each 2.5 m more another (7.5 m 2, 10 m 3,
+  15 m 5), so 17.5 m takes the elder's 6 and 20 m kills with one to spare.
+  Any fall counts: letting go, an empty wheel, walking off a ledge.
+  Jetpacks don't fall that way, so they never hurt. It is applied in
+  housekeeping on the landing tick through the same path as a killing
+  blow, so a dead elder comes back at home 2 s later. Only where players
+  have health: the town (6) and the gym, which now gives its elder 6 (a
+  scene's `player_health`, for a scene without a scenario); in the Tunnel
+  Lab, with none, falls still don't hurt. The view shows a hurting fall as
+  a hit from nowhere (the hurt sound, blood, the shake).
 
 ### K8. No glider yet
 
@@ -157,7 +172,9 @@ mountain while the view turns and zooms.
   to one).
 - Falls hurt in every scene with drops: dug pits, terraces, the town's
   hill. Golden behaviour lines move only if a golden scene has a fall over
-  5 m.
+  5 m. (CL.3: in the town only a dug shaft is that deep, its hill's cliffs
+  and terraces are about 2 m; the golden's scenes have no volume, so only
+  its state-hash lines moved.)
 - Sprites, ghouls and haulers keep walking round cliffs: a ghoul can't
   follow you up, so height is safety for now.
 - With the fog, a peak sees most of a map: climbing becomes scouting.

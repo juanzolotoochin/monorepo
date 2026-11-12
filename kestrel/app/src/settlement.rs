@@ -2798,6 +2798,19 @@ mod tests {
         assert_eq!(*from, Some(view.threats[&7].position));
     }
 
+    /// A fall that hurts (CL.3) shows as a hit from nowhere on the player:
+    /// the hurt sound, the blood and, for the local player, the shake.
+    #[test]
+    fn a_fall_that_hurts_shows_as_a_hit_from_nowhere() {
+        let (config, s, center) = forest_with_a_ghoul();
+        let events = [sim::settlement::Event::Fell { agent: 0, height: Fx::from_int(10), damage: 3, killed: false }];
+        let view = Simulation::new(&config, None, &s, 100, 0.0, center, &events);
+        let [crate::legacy::Event::ThreatSwing { agent, from, hit, killed, .. }] = view.events.as_slice() else {
+            panic!("expected one hit, got {:?}", view.events);
+        };
+        assert_eq!((agent.as_str(), *from, *hit, *killed), (s.agents[0].id.as_str(), None, true, false));
+    }
+
     fn drawn_threat(windup: Option<(u64, u64)>, swung: Option<u64>) -> crate::legacy::Threat {
         crate::legacy::Threat {
             id: 7,

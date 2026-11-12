@@ -106,6 +106,11 @@ pub struct ClimbDef {
     /// walking off a ledge.
     pub gravity: Fx,
     pub land: u64,
+    /// Falls hurt on landing (K7): a fall of `safe_fall` meters or more,
+    /// from its highest point to the floor it lands on, takes 1 health,
+    /// and each further `fall_step` meters another (`climb::fall_damage`).
+    pub safe_fall: Fx,
+    pub fall_step: Fx,
 }
 
 /// A sprite's health, in simulation units (`SACRED_TREE_BALLISTA.md`, B6).
@@ -455,6 +460,10 @@ struct ClimbFile {
     mantle: Option<u64>,
     fall: Option<Fx>,
     land: Option<u64>,
+    /// Meters: the shortest fall that hurts, and each further drop that
+    /// takes another health.
+    safe_fall: Option<Fx>,
+    fall_step: Option<Fx>,
 }
 
 /// A Sprite character's `sprite`: health, and 60 Hz frames dead.
@@ -607,7 +616,7 @@ macro_rules! merge_fields {
 }
 
 merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, chase, sprite, climb });
-merge_fields!(ClimbFile { up, down, side, wheel, hang, refill, grab, leap, lunge, lunge_time, lunge_cost, mantle, fall, land } {});
+merge_fields!(ClimbFile { up, down, side, wheel, hang, refill, grab, leap, lunge, lunge_time, lunge_cost, mantle, fall, land, safe_fall, fall_step } {});
 merge_fields!(SpriteFile { health, respawn } { mine });
 merge_fields!(SpriteMineFile { dig, capacity, transfer } {});
 merge_fields!(ChaseFile { detect, leash, look } {});
@@ -759,6 +768,8 @@ fn climb_def(file: ClimbFile) -> Result<ClimbDef, String> {
         mantle: frames(file.mantle, "mantle", 120)?,
         gravity: per_tick(per_tick(get(file.fall, "fall", Fx::ONE, Fx::from_int(100), "m/s²")?)),
         land: frames(file.land, "land", 60)?,
+        safe_fall: get(file.safe_fall, "safe_fall", Fx::ONE, Fx::from_int(80), "m")?,
+        fall_step: get(file.fall_step, "fall_step", tenth, Fx::from_int(80), "m")?,
     })
 }
 

@@ -299,8 +299,8 @@ fn an_overhang_stops_the_climb() {
 // Stamina.
 
 /// From full the wheel climbs about 15 m straight up the summit's 40 m
-/// north face, then lets go: the elder falls to the ground, exhausted,
-/// and not hurt (CL.3).
+/// north face, then lets go: the elder falls to the ground, exhausted
+/// (and hurt, `fall_tests`).
 #[test]
 fn a_full_wheel_climbs_about_15_m() {
     let mut sim = gym();

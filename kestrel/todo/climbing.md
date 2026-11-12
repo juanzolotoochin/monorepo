@@ -4,29 +4,6 @@ The climbing gym's design is [`CLIMBING.md`](../CLIMBING.md) (decisions
 K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 `kestrel-climbing`.
 
-## CL.3 Falls hurt
-
-- **Status:** open
-- **Why:** K7.
-- **What to do:** a fall's height (from the highest point of the fall)
-  hurts on landing: nothing under 5 m, then 1 health per 2.5 m, so about
-  20 m kills; the dead elder comes back as today. Numbers in content.
-  Check every scene with drops; the golden's behaviour lines move only if
-  a golden scene falls over 5 m.
-- **Where:** `sim/src/settlement/avatar.rs`, health, content.
-- **Found in:** climbing design.
-- **Tests:** the damage steps; a 20 m fall kills; a climb let go at 4 m
-  doesn't hurt; jumping down a terrace doesn't.
-- **Notes from CL.1:** the gym's ledges (13.5 m and 27 m on the west
-  face), the 20 m shoulder and the pillars give fall heights over and
-  under 5 m and 20 m to test on.
-- **Notes from CL.2:** the elder now falls (`JumpPhase::Airborne` under
-  `ClimbDef::gravity`, 20 m/s², landing 8 frames) off a face (`climb::let_go`)
-  and off any ledge in a volume; the fall's top is the feet when it
-  starts, the landing is `jump_step`'s `Airborne` to `Landing`. A dead
-  climber drops to the floor under it at once (`hurt_player`). The full
-  wheel lets go at about 15 m on the summit's north face, a fall to test.
-
 ## CL.4 Climbing in the view
 
 - **Status:** open
@@ -59,6 +36,14 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
   jump at corners (an outside wrap moves the body about 0.7 m round the
   corner in one tick, an inside turn none) and the mantle lifts first,
   then moves over: the view should smooth them.
+- **Notes from CL.3:** the gym's elder now has 6 health (scene
+  `player_health`); check how the HUD shows it there and that it reads
+  well beside the wheel. A hurting fall arrives as `Event::Fell` (height,
+  damage, killed) and shows as a ghoul hit from nowhere (legacy
+  `ThreatSwing`, `from: None`): a landing pose or thud of its own would
+  read better (see "A fall's own feedback"). `AvatarState::fall_top` is
+  the fall's top while in the air, if the view wants a "this will hurt"
+  cue.
 
 ## CL.5 Soak, tuning and demo
 
@@ -82,6 +67,11 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
   in a 2 m tunnel there is no room to rise, so none), climbing with a
   bundle or a pile haul. A demo script needs `jump` and `board` (G) to
   lunge and let go.
+- **Notes from CL.3:** the demo's "running out and falling" now hurts
+  (about 15 m: 4 or 5 of 6) and a fall from 17.5 m or more kills, with a
+  2 s respawn at the spawn by the pillars; the soak should expect deaths
+  and respawns. Tuning: `safe_fall` and `fall_step` on the elder's
+  `climb`. The town's falls hurt only into dug shafts 5 m or deeper.
 
 ## CL.6 An open-world study
 
@@ -112,6 +102,8 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 - **Notes from CL.2:** climbing reads only the held tile and the body's
   columns (`Volume::spans`), so it is local; nothing in it scales with map
   size.
+- **Notes from CL.3:** fall damage is local too (the avatar's own
+  `fall_top`, applied in housekeeping on landing).
 
 ## Climbing while carrying
 
@@ -124,7 +116,78 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 - **Where:** `sim/src/settlement/climb.rs`, `piles.rs`.
 - **Found in:** CL.2.
 
+## A fall's own feedback
+
+- **Status:** open
+- **Why:** found in CL.3: a hurting fall reuses a ghoul's hit (its
+  sound, blood and shake, `legacy` maps `Event::Fell` to `ThreatSwing`),
+  so it sounds like a blow and the blood sprays from nowhere.
+- **What to do:** a landing thud and dust scaled by the damage, and a
+  heavier landing pose; maybe a cue in the air when the fall will hurt
+  (`AvatarState::fall_top`).
+- **Where:** `app/src/legacy.rs`, `app/src/settlement.rs`, `app/src/sound`.
+- **Found in:** CL.3.
+
 ## Done
+
+### CL.3 Falls hurt
+
+- **Status:** done (branch `kestrel-climbing`, PR to come with CL.5)
+- **Why:** K7.
+- **What to do:** a fall's height (from the highest point of the fall)
+  hurts on landing: nothing under 5 m, then 1 health per 2.5 m, so about
+  20 m kills; the dead elder comes back as today. Numbers in content.
+  Check every scene with drops; the golden's behaviour lines move only if
+  a golden scene falls over 5 m.
+- **Where:** `sim/src/settlement/avatar.rs`, health, content.
+- **Found in:** climbing design.
+- **Tests:** the damage steps; a 20 m fall kills; a climb let go at 4 m
+  doesn't hurt; jumping down a terrace doesn't.
+- **Notes from CL.1:** the gym's ledges (13.5 m and 27 m on the west
+  face), the 20 m shoulder and the pillars give fall heights over and
+  under 5 m and 20 m to test on.
+- **Notes from CL.2:** the elder now falls (`JumpPhase::Airborne` under
+  `ClimbDef::gravity`, 20 m/s², landing 8 frames) off a face (`climb::let_go`)
+  and off any ledge in a volume; the fall's top is the feet when it
+  starts, the landing is `jump_step`'s `Airborne` to `Landing`. A dead
+  climber drops to the floor under it at once (`hurt_player`). The full
+  wheel lets go at about 15 m on the summit's north face, a fall to test.
+- **Done:** a climber's fall hurts on landing (K7). Numbers on the
+  elder's `climb` section: `safe_fall: 5.0, fall_step: 2.5` (`ClimbDef`,
+  checked: 1–80 m and 0.1–80 m), so a character falls hurt exactly when it
+  climbs; `climb::fall_damage`: under 5 m nothing, then 1 and 1 more per
+  2.5 m (5 m 1, 7.5 m 2, 10 m 3, 15 m 5, 17.5 m 6, 20 m 7). The fall's top
+  is `AvatarState::fall_top` (save format 48), the highest the feet have
+  been while `jump` is `Airborne` (`climb::track_fall`, last in a
+  climber's stage 2; a let-go sets it, since a let-go by command falls a
+  tick before stage 2 sees it), kept on the landing tick and then cleared;
+  housekeeping (`Settlement::fall_housekeeping`, after
+  `avatar_housekeeping`) hurts through `hurt_player` on the tick it lands,
+  so a kill ends what a killing blow does and the elder comes back at home
+  2 s later, and pushes `Event::Fell { agent, height, damage, killed }`
+  (only falls that hurt). Jetpack descents never set `Airborne`, so never
+  hurt. Only where bodies have health (`max_health > 0`): the town (6)
+  and the gym, which gets 6 from a new scene field `player_health`
+  (`assetc` `Scene`, 1–100, refused beside a scenario; `SceneSetup::player_health`
+  for the scenario-less settlement); the Tunnel Lab and other scenes
+  without health stay unhurt. The view: `legacy` maps `Fell` to a
+  `ThreatSwing` hit with no threat (`threat: 0`, `from: None`), so the
+  ghoul-hit sound, blood and, for the local player, the shake play; no
+  other view work. Scenes: the gym's drops (pillars, faces, ledges) now
+  hurt; in the town only a dug shaft 5 m or deeper does (its hill's cliffs
+  and terraces are about 2 m); the golden's scenes (forest, arena) have no
+  volume, so behaviour lines stayed and only state-hash lines moved
+  (the settlement's encoding gained `fall_top`), regenerated.
+  The prediction replay runs `track_fall` with the rest of stage 2 and
+  leaves damage to the confirmed world. Tests: `fall_tests` (sim, 11: the
+  steps, drops of 4.5–15 m, off the 10 m pillar, a let-go at 4 m, a 1.5 m
+  terrace, the 20 m shoulder killing and the respawn, the wheel running
+  out at about 15 m, the top from a lunge and from rising, no health no
+  hurt, determinism on 1 and 4 threads, the replay),
+  `a_fall_in_the_air_hurts_alike_after_loading` (save),
+  `a_fall_that_hurts_shows_as_a_hit_from_nowhere` (app), the climb
+  section's and the gym's health in `content` and `assetc`.
+
 
 ### CL.2 Climbing and stamina in the sim
 

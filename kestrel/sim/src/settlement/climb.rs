@@ -249,8 +249,31 @@ fn stand(body: &mut Body, avatar: &mut AvatarState, at: FxVec2, feet: Fx) {
     avatar.climbing.climb = None;
 }
 
-/// Lets go of the face, falling from where the climber is. No grabbing
-/// again until it stands on a floor.
+/// Stage 2, last for a climber: the top of the fall under way
+/// (`AvatarState::fall_top`), the highest its feet have been since it
+/// left a floor or a face; kept on the tick it lands, then cleared.
+pub(super) fn track_fall(avatar: &mut AvatarState, tick: u64) {
+    avatar.fall_top = match avatar.jump {
+        JumpPhase::Airborne { .. } if avatar.climbing.climb.is_none() => Some(avatar.fall_top.map_or(avatar.height, |top| top.max(avatar.height))),
+        JumpPhase::Landing { started } if started == tick => avatar.fall_top,
+        _ => None,
+    };
+}
+
+/// The health a fall of `height` meters (its top to the floor it lands on)
+/// takes (K7): none under `safe_fall`, then 1, and 1 more for each further
+/// `fall_step`. The elder's: 5 m takes 1, 7.5 m 2, 10 m 3, 15 m 5, and
+/// 17.5 m its 6.
+pub fn fall_damage(height: Fx, climb: &ClimbDef) -> u32 {
+    if height < climb.safe_fall {
+        return 0;
+    }
+    let steps = ((height - climb.safe_fall) / climb.fall_step).floor_to_int();
+    (steps + 1).clamp(1, u32::MAX as i64) as u32
+}
+
+/// Lets go of the face, falling from where the climber is (the fall's
+/// top). No grabbing again until it stands on a floor.
 pub(super) fn let_go(body: &mut Body, avatar: &mut AvatarState, tick: u64) {
     if avatar.climbing.climb.take().is_none() {
         return;
@@ -260,6 +283,9 @@ pub(super) fn let_go(body: &mut Body, avatar: &mut AvatarState, tick: u64) {
     body.velocity = FxVec2::ZERO;
     avatar.jump = JumpPhase::Airborne { started: tick, velocity: Fx::ZERO };
     avatar.flight.airborne = true;
+    // The fall starts here, though a let-go by command (stage 1) falls a
+    // tick's way before `track_fall` sees it.
+    avatar.fall_top = Some(avatar.height);
 }
 
 /// Where a climber at `p` pulling over the top `top` of `tile` stands, and

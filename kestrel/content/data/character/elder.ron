@@ -2,7 +2,7 @@
 // bundles by hand and possesses buildings. It walks and carries as the
 // exosuit does, and digs as it does too (a layer in 120 frames, 2 s), but
 // has no jetpack. Drawn by the exosuit actor until it has a flame body of
-// its own. It climbs walls (kestrel/CLIMBING.md, K2-K6).
+// its own. It climbs walls, and falls hurt it (kestrel/CLIMBING.md, K2-K7).
 (
     base: "exosuit",
     sim: (
@@ -26,6 +26,10 @@
             // Off a face or a ledge it falls under 20 m/s², landing in 8
             // frames.
             fall: 20.0, land: 8,
+            // A fall of 5 m or more (from its highest point to the floor it
+            // lands on) takes 1 health, and each 2.5 m more another: 15 m
+            // takes 5, 17.5 m the elder's 6 (K7).
+            safe_fall: 5.0, fall_step: 2.5,
         ),
     ),
     view: (),

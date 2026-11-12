@@ -28,6 +28,7 @@ fn scene(layout: &VolumeLayout, spawn: [i32; 2]) -> Result<World, String> {
         sloped: true,
         volume: Some(layout.build()),
         spawn: [Fx::from_int(spawn[0]), Fx::ZERO, Fx::from_int(spawn[1])],
+        player_health: 6,
         ..SceneSetup::default()
     };
     World::new_scene(1, &Content::builtin(), &setup)
@@ -36,6 +37,7 @@ fn scene(layout: &VolumeLayout, spawn: [i32; 2]) -> Result<World, String> {
 /// The gym as the app makes it, the elder at the scene's spawn.
 pub(super) fn gym() -> Simulation {
     assert!(SCENE.contains("spawn: (28.0, 0.0, 26.0)"), "the scene's spawn");
+    assert!(SCENE.contains("player_health: Some(6)"), "the scene's health");
     Simulation::from_world(scene(&layout(), [28, 26]).unwrap(), 1)
 }
 

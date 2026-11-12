@@ -488,6 +488,10 @@ pub enum Event {
     SpriteReturned { agent: AgentIx },
     /// The Sacred Tree's health reached 0: the run is over (B7).
     TreeFell,
+    /// Player `agent` landed from a fall of `height` meters, which took
+    /// `damage` health (`killed` if that was the last; K7 of the climbing
+    /// design). Only falls that hurt.
+    Fell { agent: AgentIx, height: Fx, damage: u32, killed: bool },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

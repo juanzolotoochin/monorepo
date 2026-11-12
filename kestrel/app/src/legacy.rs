@@ -1092,6 +1092,9 @@ impl Simulation {
                     s::Event::BuildingBroken { building } => Event::BuildingBroken { building: *building as usize },
                     s::Event::SpriteReturned { agent } => Event::SpriteReturned { agent: agent_name(*agent) },
                     s::Event::TreeFell => Event::TreeFell,
+                    // A fall that hurts shows as a hit that comes from
+                    // nowhere: the blood, the shake and the hurt sound.
+                    s::Event::Fell { agent, killed, .. } => Event::ThreatSwing { threat: 0, agent: agent_name(*agent), from: None, hit: true, killed: *killed },
                     s::Event::Dispelled { threat, position } => Event::Dispelled { target: *threat, position: p(*position) },
                 })
             })

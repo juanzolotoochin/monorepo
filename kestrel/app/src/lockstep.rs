@@ -449,6 +449,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
             position: [q(v.position[0]), q(v.position[2])],
             heading: q(v.heading.to_radians()),
         }).collect(),
+        player_health: scene.player_health.unwrap_or(0),
     }
 }
 

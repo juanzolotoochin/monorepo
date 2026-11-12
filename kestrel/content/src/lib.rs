@@ -602,6 +602,7 @@ mod tests {
         assert!(climb.hang < climb.drain && climb.refill > climb.drain);
         assert_eq!((climb.grab, climb.lunge_ticks), (ticks_from_60hz(9), ticks_from_60hz(20)));
         assert_eq!(climb.lunge_cost, "0.2".parse::<Fx>().unwrap());
+        assert_eq!((climb.safe_fall, climb.fall_step), (Fx::from_int(5), Fx::from_ratio(5, 2)));
         for name in ["exosuit", "exosuit_moonlit", "worker", "ghoul", "sprite"] {
             assert!(climb_of(name).is_none(), "{name} doesn't climb");
         }
@@ -611,6 +612,8 @@ mod tests {
         assert!(bad(&elder.replace("up: 1.0", "up: 0.0")).contains("climb.up"));
         assert!(bad(&elder.replace("grab: 9,", "")).contains("climb.grab"));
         assert!(bad(&elder.replace("lunge_cost: 0.2", "lunge_cost: 2.0")).contains("climb.lunge_cost"));
+        assert!(bad(&elder.replace("fall_step: 2.5", "fall_step: 0.0")).contains("climb.fall_step"));
+        assert!(bad(&elder.replace("safe_fall: 5.0, ", "")).contains("climb.safe_fall"));
         assert!(bad(&GHOUL.replace("breach_damage: 1)", "breach_damage: 1), climb: (up: 1.0)")).contains("only Player"));
     }
 

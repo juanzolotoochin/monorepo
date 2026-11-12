@@ -349,6 +349,10 @@ pub struct SceneSetup {
     /// points, in scene meters, that follow the player
     /// (`SpriteJob::Follow`). They join the scenario's sprites.
     pub walkers: Vec<[Fx; 2]>,
+    /// The player's health in a scene without a scenario (a scenario has
+    /// its own `player_health`): 0, the default, for none, so nothing hurts
+    /// it; the Climbing Gym's 6, so falls can kill (CL.3).
+    pub player_health: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -613,7 +617,8 @@ impl Settlement {
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                let scenario = Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player);
+                let mut scenario = Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player);
+                scenario.player_health = setup.player_health;
                 Settlement::from_scenario(&Self::with_walkers(scenario, &setup.walkers), &[], terrain, content)?
             }
         };
@@ -1248,6 +1253,8 @@ mod tests;
 mod climbing_gym_tests;
 #[cfg(test)]
 mod climbing_tests;
+#[cfg(test)]
+mod fall_tests;
 #[cfg(test)]
 mod combat_tests;
 #[cfg(test)]

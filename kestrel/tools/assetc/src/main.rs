@@ -196,6 +196,13 @@ mod tests {
         let decoded = ScenePack::decode(&bytes).unwrap();
         assert_eq!(decoded.scene.volume, Some(volume));
         assert_eq!(decoded.scene.zoom_out, Some(80.0));
+        // The elder has health there, so falls hurt (CL.3).
+        assert_eq!(decoded.scene.player_health, Some(6));
+        for health in [0, 101] {
+            let mut scene = scene.clone();
+            scene.player_health = Some(health);
+            assert!(assemble(scene, vec![]).unwrap_err().contains("player_health"));
+        }
         // A zoom out nearer than the usual, or past the most, is refused.
         for zoom in [20.0, 200.0] {
             let mut scene = scene.clone();
