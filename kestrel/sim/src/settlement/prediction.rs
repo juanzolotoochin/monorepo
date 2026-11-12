@@ -145,7 +145,7 @@ impl<'a> AvatarReplay<'a> {
             // rider. A crawler's feet keep clear of the bodies as confirmed.
             let vehicle_def = &s.characters[v.character as usize];
             vehicle::self_update_among(v, terrain, vehicle_def, &s.standing_for_crawlers());
-            vehicle::seat(body, state, v, vehicle_def, state.seat.and_then(Seat::place));
+            vehicle::seat(body, state, v, vehicle_def, state.seat.and_then(super::crawler::deck_spot));
         }
         let mut out = Messages::default();
         s.read_avatar(self.me, &self.state, tick, terrain, &mut out);

@@ -183,6 +183,16 @@ pub enum Command {
     GuestBoard {
         guest: u32,
     },
+    /// Guest `guest` holds their movement stick this way (arena x and z,
+    /// length up to 1), as `drive` does for the host: a guest in a
+    /// vehicle's cab steers it, so a demo can have a guest pilot while
+    /// the local player mans the crawler's gun.
+    GuestDrive {
+        guest: u32,
+        direction: [f32; 2],
+        #[serde(default)]
+        run: bool,
+    },
     /// Digs out a layer under the player, in a digging scene.
     Dig,
     /// In a volume scene, digs the tile in front: `"Level"` (the default),

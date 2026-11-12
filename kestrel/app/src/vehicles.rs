@@ -16,6 +16,12 @@
 //! along arcs between its spots (`crawler::swing_point`), interpolated
 //! between the last two ticks as the body is. While the local player pilots
 //! one, the camera pulls back (`Vehicles::pull`).
+//!
+//! A crawler with a gun (TU.5 of the turret) carries the rig's swivel
+//! ballista at the gun's mount on the cab's roof, turning (eased) to its aim
+//! ([`gun_aim`]): the local gunner's reticle while they aim, another elder
+//! gunner's confirmed reticle, else the last shot's aim (a sprite's or an
+//! elder's), else where it last pointed (forward to begin with).
 
 use bevy::prelude::*;
 use fx::Fx;
@@ -87,6 +93,9 @@ struct Parts {
 struct DrawnLegs {
     def: content::character::CrawlerDef,
     segments: [[Entity; 4]; 4],
+    /// The gun's pieces, on a crawler with a gun, and its drawn turn from
+    /// the body's forward (`crawler::gun_yaw`), eased toward its aim.
+    gun: Option<(Entity, f32)>,
     /// Each foot's spot last frame, and how far from it the foot is drawn
     /// while it glides over a jump.
     last: Option<([Vec3; 4], [Vec3; 4])>,
@@ -105,6 +114,20 @@ pub struct Rover {
     /// How far each wheel has turned, in radians.
     spin: f32,
     last: Option<Vec3>,
+}
+
+#[cfg(test)]
+impl Rover {
+    /// A crawler's gun's drawn turn from the body's forward, radians toward
+    /// its right, if it has a gun.
+    pub fn gun_yaw(&self) -> Option<f32> {
+        self.crawler.as_ref()?.gun.map(|(_, yaw)| yaw)
+    }
+
+    /// Which vehicle it draws.
+    pub fn index(&self) -> usize {
+        self.index
+    }
 }
 
 impl Service for Vehicles {
@@ -220,9 +243,18 @@ fn spawn_crawler(commands: &mut Commands, parts: &Parts, index: usize, c: conten
             .id()
     };
     let chassis = group(&rig.body);
+    // The gun on the cab's roof, under the body, at its mount.
+    let gun = c.gun.as_ref().map(|g| {
+        let gun = group(&rig.gun);
+        (gun, crate::crawler::gun_local(g))
+    });
     let leg = &rig.leg;
     let segments = [(); 4].map(|_| [&leg.hip[..], &leg.thigh.pieces[..], &leg.shin.pieces[..], &leg.foot.pieces[..]].map(&mut group));
-    let drawn = DrawnLegs { def: c, segments, last: None };
+    if let Some((gun, at)) = gun {
+        commands.entity(gun).insert(Transform::from_translation(at));
+        commands.entity(chassis).add_child(gun);
+    }
+    let drawn = DrawnLegs { def: c, segments, gun: gun.map(|(e, _)| (e, 0.0)), last: None };
     let mut root = commands.spawn((
         Rover { index, chassis, wheels: [chassis; 4], crawler: Some(drawn), contact: None, spin: 0.0, last: None },
         WorldScoped::default(),
@@ -266,18 +298,21 @@ fn draw(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut rovers: Query<(Entity, &mut Rover)>,
     mut transforms: Query<&mut Transform, Without<Player>>,
+    dispatcher: Option<Res<crate::input::gameplay::Dispatcher>>,
 ) {
     let (Some(current), Some(terrain)) = (&mirror.current, service.world().map(sim::World::terrain)) else { return };
     if current.vehicles.is_empty() {
         return;
     }
-    // The vehicle the local player is drawn sitting in, if any, driving or
-    // riding (CR.4), and a rider's place on the deck.
+    // The vehicle the local player is drawn sitting in, if any, driving,
+    // riding (CR.4) or at the gun (TU.1 of the turret), and a rider's or
+    // the gunner's spot on the deck.
     let seat = drawn.0.as_ref().and_then(|d| d.avatar().seat);
     let mine = seat.and_then(sim::settlement::Seat::aboard).map(usize::from);
-    let place = seat.and_then(sim::settlement::Seat::place);
+    let spot = seat.and_then(sim::settlement::crawler::deck_spot);
     let dt = time.delta_secs();
-    // Riders get the pilot's wider view too: they see what it steps over.
+    // Riders and the gunner get the pilot's wider view too: they see what
+    // it steps over.
     let aboard = mine.and_then(|i| current.vehicles.get(i)).is_some_and(|v| current.characters[v.character as usize].crawler.is_some());
     vehicles.pull = eased_pull(vehicles.pull, aboard, dt);
     let parts = vehicles.parts.get_or_insert_with(|| parts(&mut meshes, &mut materials));
@@ -285,7 +320,7 @@ fn draw(
     let drawn_count = rovers.iter().count();
     for (index, v) in current.vehicles.iter().enumerate().skip(drawn_count) {
         let t = tuning(v);
-        spawn(&mut commands, parts, index, t.wheelbase.to_f32(), t.track.to_f32(), current.characters[v.character as usize].crawler);
+        spawn(&mut commands, parts, index, t.wheelbase.to_f32(), t.track.to_f32(), current.characters[v.character as usize].crawler.clone());
     }
     for (entity, mut rover) in &mut rovers {
         let Some(v) = current.vehicles.get(rover.index) else { continue };
@@ -293,14 +328,17 @@ fn draw(
         let pose = match (mine == Some(rover.index), player.single()) {
             (true, Ok(p)) => {
                 let (yaw, _, _) = p.rotation.to_euler(EulerRot::YXZ);
-                // A rider sits off the middle: the body is that far back.
-                let off = place.map_or(Vec3::ZERO, |place| rider_offset(yaw, place));
+                // A rider or gunner sits off the middle: the body is that
+                // far back.
+                let off = spot.map_or(Vec3::ZERO, |o| deck_offset(yaw, o));
                 Pose { at: Vec3::new(p.translation.x, 0.0, p.translation.z) - off, base: p.translation.y - t.seat.to_f32(), heading: yaw }
             }
             _ => interpolated(&mirror, rover.index, v),
         };
         if rover.crawler.is_some() && v.legs.is_some() {
-            draw_crawler(&mut transforms, &mut rover, entity, &mirror, &pose, v, dt);
+            let reticle = dispatcher.as_ref().and_then(|d| d.town.reticle.as_ref());
+            let aim = gun_aim(current, rover.index, v, &mirror, reticle);
+            draw_crawler(&mut transforms, &mut rover, entity, &mirror, &pose, v, aim, dt);
             continue;
         }
         // The ground under each wheel where it is drawn: in a volume, the
@@ -347,13 +385,32 @@ fn draw(
     }
 }
 
-/// Where the rider in `place` sits from a crawler's middle, in the view, the
-/// crawler facing `heading` (`crawler::RIDERS`).
-fn rider_offset(heading: f32, place: u8) -> Vec3 {
-    let o = sim::settlement::crawler::RIDERS[place as usize];
+/// Where someone at `o` on a crawler's deck (a rider or the gunner,
+/// `crawler::deck_spot`) sits from its middle, in the view, the crawler
+/// facing `heading`.
+fn deck_offset(heading: f32, o: content::character::Offset) -> Vec3 {
     let forward = Vec3::new(heading.sin(), 0.0, heading.cos());
     let right = Vec3::new(heading.cos(), 0.0, -heading.sin());
     forward * o.along.to_f32() + right * o.across.to_f32()
+}
+
+/// Where vehicle `index`'s gun aims now, in view coordinates: the local
+/// gunner's reticle while they aim (`input::town::aim_reticle`), else an
+/// elder gunner's confirmed reticle (an offset from the mount, longer than
+/// the meter-long facing they boarded with), else its last shot's aim
+/// (`Turret::aim`, a sprite's or an elder's); `None` before any.
+fn gun_aim(current: &sim::settlement::Settlement, index: usize, v: &VehicleState, mirror: &WorldMirror, reticle: Option<&crate::input::town::Reticle>) -> Option<Vec3> {
+    if let Some(r) = reticle.filter(|r| r.from == crate::input::town::Aimer::Gun(index as u16)) {
+        return Some(r.point);
+    }
+    let (c, gun) = sim::settlement::gun::gun_of(&current.characters[v.character as usize])?;
+    let g = v.gun.as_ref()?;
+    let aimed = current.gunner_of(index as u16).and_then(|a| current.agents.get(a)?.avatar()?.aim).filter(|aim| aim.length() > Fx::ONE + Fx::from_ratio(1, 100));
+    if let Some(aim) = aimed {
+        let (mount, _) = sim::settlement::gun::mount(v, c, gun);
+        return Some(mirror.to_view(mount + aim));
+    }
+    g.turret.aim.map(|p| mirror.to_view(p))
 }
 
 /// The camera's pull after `dt` seconds more, easing toward `PILOT_PULL`
@@ -367,6 +424,7 @@ pub fn eased_pull(pull: f32, aboard: bool, dt: f32) -> f32 {
 /// deck `deck` over that, and each leg solved from its hip to its foot.
 /// Feet are interpolated between the last two ticks; a foot whose spot
 /// jumps (`FOOT_JUMP`) glides there.
+#[allow(clippy::too_many_arguments)]
 fn draw_crawler(
     transforms: &mut Query<&mut Transform, Without<Player>>,
     rover: &mut Rover,
@@ -374,11 +432,12 @@ fn draw_crawler(
     mirror: &WorldMirror,
     pose: &Pose,
     v: &VehicleState,
+    aim: Option<Vec3>,
     dt: f32,
 ) {
     let (index, chassis) = (rover.index, rover.chassis);
     let drawn = rover.crawler.as_mut().expect("a crawler");
-    let c = drawn.def;
+    let c = drawn.def.clone();
     let legs = v.legs.as_ref().expect("a crawler's legs");
     let deck = pose.base + c.deck.to_f32();
     let root = Transform::from_translation(pose.at).with_rotation(Quat::from_rotation_y(pose.heading));
@@ -387,6 +446,18 @@ fn draw_crawler(
     }
     if let Ok(mut t) = transforms.get_mut(chassis) {
         *t = Transform::from_xyz(0.0, deck, 0.0);
+    }
+    // The gun turns to its aim from where its mount is drawn, eased; with
+    // no aim it holds its turn.
+    if let (Some((gun, yaw)), Some(def)) = (drawn.gun.as_mut(), c.gun.as_ref()) {
+        let local = crate::crawler::gun_local(def) + Vec3::Y * deck;
+        let mount = root.transform_point(local);
+        if let Some(target) = aim.and_then(|aim| crate::crawler::gun_yaw(pose.heading, mount, aim)) {
+            *yaw = crate::crawler::ease_yaw(*yaw, target, dt);
+        }
+        if let Ok(mut t) = transforms.get_mut(*gun) {
+            *t = Transform::from_translation(crate::crawler::gun_local(def)).with_rotation(Quat::from_rotation_y(*yaw));
+        }
     }
     let view = |p| mirror.to_view(p);
     let before = mirror.previous.as_ref().and_then(|p| p.vehicles.get(index)).and_then(|b| b.legs.as_ref()).unwrap_or(legs);
@@ -435,11 +506,13 @@ mod tests {
         let def = &content.rules.characters[ix as usize];
         for degrees in [0, 37, 90, 200, 300] {
             let heading = Fx::from_ratio(degrees * 31_416, 1_800_000);
-            let v = VehicleState { character: ix, position: fx::FxVec2::ZERO, heading, speed: Fx::ZERO, height: Fx::ZERO, fall: Fx::ZERO, wheels: [Fx::ZERO; 4], control: Default::default(), legs: None };
-            for place in 0..3 {
-                let (seat, _) = v.seat_at(def, Some(place));
-                let off = rider_offset(heading.to_f32(), place);
-                assert!((off - Vec3::new(seat.x.to_f32(), 0.0, seat.y.to_f32())).length() < 1e-3, "place {place} at {degrees} degrees: {off} vs {seat:?}");
+            let v = VehicleState { character: ix, position: fx::FxVec2::ZERO, heading, speed: Fx::ZERO, height: Fx::ZERO, fall: Fx::ZERO, wheels: [Fx::ZERO; 4], control: Default::default(), legs: None, gun: None };
+            let seats = [sim::settlement::Seat::Rider { vehicle: 0, place: 0 }, sim::settlement::Seat::Rider { vehicle: 0, place: 1 }, sim::settlement::Seat::Gunner { vehicle: 0 }];
+            for place in seats {
+                let o = sim::settlement::crawler::deck_spot(place).unwrap();
+                let (seat, _) = v.seat_at(def, Some(o));
+                let off = deck_offset(heading.to_f32(), o);
+                assert!((off - Vec3::new(seat.x.to_f32(), 0.0, seat.y.to_f32())).length() < 1e-3, "{place:?} at {degrees} degrees: {off} vs {seat:?}");
             }
         }
     }
@@ -496,5 +569,103 @@ mod tests {
         assert!(piloted, "the elder boarded");
         assert!(most > PILOT_PULL - 0.05, "pulled back to {most}");
         assert!(last < 1.05, "eased back in to {last}");
+    }
+
+    /// A scripted guest pilots the crawler (`guest_drive`, TU.6 of the
+    /// crawler turret) while the local elder mans its gun and fires: the
+    /// guest's stick walks it south, the elder's doesn't steer it.
+    #[test]
+    fn a_scripted_guest_pilots_while_the_elder_mans_the_gun() {
+        let script = serde_json::json!({
+            "version": 1, "scene": "crawler-lab", "fps": 30, "width": 640, "height": 480, "max_frames": 600,
+            "steps": [
+                { "op": "guest_join", "guest": 1 },
+                { "op": "wait", "frames": 10 },
+                { "op": "guest_walk", "guest": 1, "position": [0.2, -1.4] },
+                { "op": "wait", "frames": 14 },
+                { "op": "walk", "position": [0.6, 0] },
+                { "op": "wait", "frames": 20 },
+                { "op": "guest_board", "guest": 1 },
+                { "op": "wait", "frames": 10 },
+                { "op": "board" },
+                { "op": "wait", "frames": 20 },
+                { "op": "guest_drive", "guest": 1, "direction": [0, 1] },
+                { "op": "settlement_fire", "x": 0.0, "y": 5.0 },
+                { "op": "wait", "frames": 150 },
+                { "op": "guest_drive", "guest": 1, "direction": [0, 0] },
+                { "op": "wait", "frames": 30 }
+            ]
+        });
+        let options = crate::control::Options { simulation: true, script: Some(serde_json::from_value(script).unwrap()), ..default() };
+        let library = crate::assets::SceneLibrary::new();
+        let index = library.index("crawler-lab").unwrap();
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(index));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 30.0)));
+        crate::start_world(&mut app);
+        let (mut start, mut state, mut bolts) = (None, serde_json::Value::Null, 0);
+        for _ in 0..560 {
+            app.update();
+            let hub = app.world().resource::<crate::control::Hub>();
+            assert!(hub.failed.is_none(), "{}", hub.report(0));
+            if hub.finished.is_some() {
+                break;
+            }
+            state = crate::settlement::snapshot(app.world());
+            let guest = state["simulation"]["agents"]["player-1"]["position"][1].as_f64();
+            if state["seat"]["gunner"] == true {
+                start = start.or(guest);
+            }
+            bolts = bolts.max(state["simulation"]["projectiles"].as_object().map_or(0, |p| p.len()));
+        }
+        assert_eq!(state["seat"], serde_json::json!({"vehicle": 0, "gunner": true}), "the elder mans the gun");
+        let moved = state["simulation"]["agents"]["player-1"]["position"][1].as_f64().unwrap() - start.expect("the elder boarded");
+        assert!(moved > 1.0, "the guest walked it south: {moved} m");
+        assert_eq!(bolts, 1, "the elder fired once");
+    }
+
+    /// The control protocol's sprite job `"crew"` (TU.4 of the crawler
+    /// turret) sends a lab sprite to the crawler's gun, as a demo script
+    /// does: the view reads it as at the gun and draws it up on the deck.
+    #[test]
+    fn a_scripted_sprite_crews_the_crawler() {
+        let script = serde_json::json!({
+            "version": 1, "scene": "crawler-lab", "fps": 30, "width": 640, "height": 480, "max_frames": 1500,
+            "steps": [
+                { "op": "wait", "frames": 10 },
+                { "op": "settlement_sprite_job", "sprite": "sprite_ash", "job": "crew" },
+                { "op": "wait", "frames": 1400 }
+            ]
+        });
+        let options = crate::control::Options { simulation: true, script: Some(serde_json::from_value(script).unwrap()), ..default() };
+        let library = crate::assets::SceneLibrary::new();
+        let index = library.index("crawler-lab").unwrap();
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(index));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 30.0)));
+        crate::start_world(&mut app);
+        let mut state = serde_json::Value::Null;
+        for _ in 0..1450 {
+            app.update();
+            state = crate::settlement::snapshot(app.world());
+            if state["simulation"]["sprites"]["sprite_ash"]["activity"] == "gunning" {
+                break;
+            }
+        }
+        // A few frames on, past the tick it climbed up on.
+        for _ in 0..5 {
+            app.update();
+        }
+        state = crate::settlement::snapshot(app.world());
+        let ash = &state["simulation"]["sprites"]["sprite_ash"];
+        assert_eq!((ash["job"].as_str(), ash["activity"].as_str()), (Some("crew"), Some("gunning")), "{ash}");
+        // Drawn on the deck, about 3 m up, not on the ground.
+        let feet = state["simulation"]["agents"]["sprite_ash"]["feet"].as_f64().unwrap();
+        assert!(feet > 2.0, "its feet at {feet} m");
+        // A sprite gunner gives the elder on foot no reticle (TU.5); the
+        // drawn gun turns to its shots once it fires.
+        assert_eq!(app.world().resource::<crate::input::gameplay::Dispatcher>().town.reticle, None);
+        let mut rovers = app.world_mut().query::<&Rover>();
+        assert!(rovers.iter(app.world()).any(|r| r.gun_yaw().is_some()), "the crawler carries its gun");
     }
 }

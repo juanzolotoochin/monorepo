@@ -1639,3 +1639,197 @@ fn the_town_view_turns_and_movement_stays_screen_relative() {
     game.seconds(0.5);
     assert_eq!((game.dispatcher().town.view.quarter(), game.dispatcher().town.view.yaw()), (0, 0.0));
 }
+
+// ---------------------------------------------------------------------------
+// The Crawler Lab's gun and interact (TU.5 of the crawler turret).
+
+impl Game {
+    /// Joins guest `guest` (players 1 to 8) and walks them to `at`.
+    fn guest_join(&mut self, guest: u32, at: Vec3) {
+        let player = PlayerId(guest);
+        self.app.world_mut().resource_mut::<SessionService>().command_as(player, CommandKind::Join).unwrap();
+        self.frames(5);
+        let mut service = self.app.world_mut().resource_mut::<SessionService>();
+        let agent = service.settlement().and_then(|s| s.avatar_of(player)).expect("the guest joined");
+        let target = service.to_sim(at);
+        service.command_as(player, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::GoTo { target, run: false } }).unwrap();
+        self.seconds(3.0);
+    }
+
+    /// Guest `guest` presses the boarding key (boards, or climbs down).
+    fn guest_board(&mut self, guest: u32) {
+        let player = PlayerId(guest);
+        let mut service = self.app.world_mut().resource_mut::<SessionService>();
+        let agent = service.settlement().and_then(|s| s.avatar_of(player)).expect("the guest joined");
+        service.command_as(player, CommandKind::Board { agent }).unwrap();
+        self.frames(10);
+    }
+
+    fn seat(&self) -> Option<sim::settlement::Seat> {
+        self.avatar().avatar().unwrap().seat
+    }
+
+    fn press_key(&mut self, key: KeyCode) {
+        self.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        self.frames(1);
+        self.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+        self.frames(10);
+    }
+
+    /// The crawler's gun's mount now, and its height over the arena floor.
+    fn mount(&self) -> (fx::FxVec2, fx::Fx) {
+        let s = self.service().settlement().unwrap();
+        let v = &s.vehicles[0];
+        let (c, gun) = sim::settlement::gun::gun_of(&s.characters[v.character as usize]).unwrap();
+        sim::settlement::gun::mount(v, c, gun)
+    }
+
+    /// The crawler's drawn gun's turn from its body's forward.
+    fn gun_yaw(&mut self) -> f32 {
+        let mut q = self.app.world_mut().query::<&crate::vehicles::Rover>();
+        q.iter(self.app.world()).find(|r| r.index() == 0).and_then(|r| r.gun_yaw()).expect("the crawler's drawn gun")
+    }
+}
+
+/// In the Crawler Lab the reticle shows for an elder at the crawler's gun
+/// only, not for its pilot or a rider: the right stick moves it (cut to the
+/// gun's 7 m, an offset from the mount), the drawn gun swivels to it, RT
+/// fires a bolt from the mount at it and RB throws the fireball, as at a
+/// possessed ballista (T5).
+#[test]
+fn an_elder_at_the_crawlers_gun_aims_and_fires_from_the_controller() {
+    use sim::settlement::Seat;
+    let mut game = Game::new("crawler-lab", 30.0);
+    game.frames(5);
+    game.claim(1);
+    game.walk_to(Vec3::new(0.6, 0.0, 0.0));
+    let reticle = |game: &Game| game.dispatcher().town.reticle.clone();
+    // Piloting: no reticle.
+    game.tap(1, Button::LeftStick);
+    game.frames(10);
+    assert_eq!(game.seat(), Some(Seat::Vehicle(0)));
+    assert_eq!(reticle(&game), None, "the pilot gets no reticle");
+    game.tap(1, Button::LeftStick);
+    game.frames(10);
+    assert_eq!(game.seat(), None);
+    // Riding, with guests in the cab and at the gun: no reticle.
+    game.guest_join(1, Vec3::new(0.2, 0.0, -1.4));
+    game.guest_join(2, Vec3::new(0.2, 0.0, 1.4));
+    game.guest_board(1);
+    game.guest_board(2);
+    game.tap(1, Button::LeftStick);
+    game.frames(10);
+    assert!(matches!(game.seat(), Some(Seat::Rider { .. })), "{:?}", game.seat());
+    assert_eq!(reticle(&game), None, "a rider gets no reticle");
+    game.tap(1, Button::LeftStick);
+    game.frames(10);
+    game.guest_board(2);
+    // At the gun the second guest left: the reticle, half the range ahead
+    // of the crawler to begin with.
+    game.tap(1, Button::LeftStick);
+    game.frames(10);
+    assert_eq!(game.seat(), Some(Seat::Gunner { vehicle: 0 }));
+    let r = reticle(&game).expect("a gunner's reticle");
+    assert_eq!(r.from, town::Aimer::Gun(0));
+    let (mount, top) = game.mount();
+    assert!((r.offset.length().to_f32() - 3.5).abs() < 0.05, "half the range: {:?}", r.offset);
+    assert!(r.center.distance(game.service().to_view(mount).with_y(r.center.y)) < 1e-3, "round the mount");
+    let yaw = game.gun_yaw();
+    assert!(yaw.abs() < 0.05, "the gun faces forward: {yaw}");
+    // The right stick moves it, never past 7 m.
+    game.pads().right_stick(1, Vec2::new(1.0, 0.0));
+    game.seconds(3.0);
+    game.pads().right_stick(1, Vec2::ZERO);
+    game.frames(30);
+    let r = reticle(&game).unwrap();
+    let range = r.offset.length().to_f32();
+    assert!(range > 6.9 && range <= 7.0 + 1e-3, "cut to the range: {range}");
+    // The drawn gun turned to it.
+    let heading = game.service().settlement().unwrap().vehicles[0].heading.to_f32();
+    let want = crate::crawler::gun_yaw(heading, game.service().to_view(mount), r.point).unwrap();
+    let yaw = game.gun_yaw();
+    assert!((yaw - want).abs() < 0.05 && yaw.abs() > 0.5, "the gun turned to {want}: {yaw}");
+    // RT fires: one Attack at the reticle, a bolt from the mount.
+    let attacks = game.count(is_attack);
+    game.pads().right_trigger(1, 1.0);
+    game.frames(1);
+    game.pads().right_trigger(1, 0.0);
+    game.frames(5);
+    assert_eq!(game.count(is_attack), attacks + 1);
+    let s = game.service().settlement().unwrap();
+    let bolt = s.projectiles.iter().find(|p| p.from == mount).expect("a bolt from the mount");
+    assert_eq!(bolt.to, mount + r.offset, "at the reticle");
+    assert!((bolt.launch_height - top).abs() < fx::Fx::from_ratio(1, 100), "from the mount's height: {:?}", bolt.launch_height);
+    assert_eq!(s.vehicles[0].gun.as_ref().unwrap().store.total(), 19, "a stone spent");
+    // RB throws the fireball, and its cooldown starts.
+    let bursts = game.count(|c| matches!(c, CommandKind::Burst { .. }));
+    game.tap(1, Button::RightBumper);
+    game.frames(5);
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Burst { .. })), bursts + 1);
+    let tick = game.service().world().unwrap().tick();
+    assert!(game.avatar().avatar().unwrap().fireball_ready > tick, "the fireball's cooldown runs");
+    // Climbing down takes the reticle away.
+    game.tap(1, Button::LeftStick);
+    game.frames(10);
+    assert_eq!((game.seat(), reticle(&game)), (None, None));
+}
+
+/// In the Crawler Lab, E takes stone from the pile and loads the gun by
+/// hand ("Interact in the Crawler Lab"), its prompt saying what the store
+/// holds, and the HUD reads the store ("GUN 18/20 STONE").
+#[test]
+fn e_takes_stone_and_loads_the_crawlers_gun_in_the_lab() {
+    use sim::settlement::{InteractTarget, Seat};
+    let mut game = Game::new("crawler-lab", 30.0);
+    game.frames(5);
+    let hud = |game: &mut Game| {
+        let mut q = game.app.world_mut().query::<&Text>();
+        q.iter(game.app.world()).map(|t| t.0.clone()).find(|t| t.starts_with("CRAWLER LAB")).expect("the lab's HUD line")
+    };
+    assert!(hud(&mut game).contains("GUN 20/20 STONE"), "{}", hud(&mut game));
+    // A guest in the cab; the elder at the gun fires twice with the mouse.
+    game.guest_join(1, Vec3::new(0.2, 0.0, -1.4));
+    game.guest_board(1);
+    game.walk_to(Vec3::new(0.6, 0.0, 0.0));
+    game.press_key(KeyCode::KeyG);
+    assert_eq!(game.seat(), Some(Seat::Gunner { vehicle: 0 }));
+    for _ in 0..2 {
+        game.app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        game.frames(1);
+        game.app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        game.seconds(1.0);
+    }
+    let store = |game: &Game| game.service().settlement().unwrap().vehicles[0].gun.as_ref().unwrap().store.total();
+    assert_eq!(store(&game), 18, "two bolts");
+    assert!(hud(&mut game).contains("GUN 18/20 STONE (YOU)"), "{}", hud(&mut game));
+    game.press_key(KeyCode::KeyG);
+    assert_eq!(game.seat(), None);
+    // To the pile: E takes a bundle.
+    let pile = {
+        let s = game.service().settlement().unwrap();
+        let d = s.depots.iter().position(|d| d.id == "lab_stone").unwrap();
+        (d as u16, game.service().to_view(s.depots[d].position))
+    };
+    game.walk_to(pile.1 + Vec3::new(0.9, 0.0, 0.0));
+    game.frames(3);
+    let highlight = game.dispatcher().town.highlight.clone().expect("a target by the pile");
+    assert_eq!(highlight.target, InteractTarget::Depot(pile.0), "{highlight:?}");
+    game.press_key(KeyCode::KeyE);
+    game.seconds(4.0);
+    let carried = |game: &Game| game.avatar().carry.inventory.total();
+    assert!(carried(&game) >= 2, "took stone: {}", carried(&game));
+    // Back beside the crawler: E loads what fits.
+    game.walk_to(Vec3::new(0.6, 0.0, 0.0));
+    game.frames(3);
+    let highlight = game.dispatcher().town.highlight.clone().expect("the gun's store");
+    assert_eq!(highlight.target, InteractTarget::Gun(0));
+    assert_eq!(highlight.prompt, "LOAD 2 STONE (GUN 18/20)");
+    let before = carried(&game);
+    game.press_key(KeyCode::KeyE);
+    game.seconds(4.0);
+    assert_eq!((store(&game), carried(&game)), (20, before - 2), "loaded what fits");
+    assert!(hud(&mut game).contains("GUN 20/20 STONE"));
+    // B builds nothing in the lab.
+    game.press_key(KeyCode::KeyB);
+    assert_eq!(game.dispatcher().town.build_menu, None);
+}
