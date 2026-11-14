@@ -165,8 +165,12 @@ pub enum Command {
     Jetpack {
         enabled: bool,
     },
-    /// Climbs into the nearest vehicle, or out of the one driven.
+    /// Climbs into the nearest vehicle, or out of the one driven; on a
+    /// face, lets go of it (CL.2).
     Board,
+    /// Jumps, as Space does: for a climber at a face a grab up it, on a
+    /// face a lunge the stick's way (CL.2).
+    Jump,
     /// Holds the movement stick this way (arena x and z, length up to 1);
     /// a driver steers their vehicle with it.
     Drive {

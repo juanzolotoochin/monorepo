@@ -4,9 +4,121 @@ The climbing gym's design is [`CLIMBING.md`](../CLIMBING.md) (decisions
 K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 `kestrel-climbing`.
 
-## CL.4 Climbing in the view
+## CL.5 Soak, tuning and demo
 
 - **Status:** open
+- **Why:** the exploration is reviewed by video.
+- **What to do:** a soak in the gym (random climbing, `validate` every
+  tick); tune speeds, stamina and falls; a demo video climbing a pillar,
+  the 40 m face with two rests, a corner, an overhang, a lunge, running
+  out and falling; the full suite; a `docs/test-time.md` row; docs and
+  `CLIMBING.md`'s status; a "Climb the gym" section in
+  `todo/playtest-review.md`.
+- **Where:** sim tests, `app/demos/`, docs.
+- **Found in:** climbing design.
+- **Tests:** the soak; the full suite.
+- **Notes from CL.1:** `climbing_gym_demo` is a walk-round with
+  `camera_zoom` and `camera_rotate`; a script is capped at 120 s
+  (`max_frames <= fps * 120`). The renders took 100 to 195 s locally.
+- **Notes from CL.2:** numbers in `elder.ron`'s `climb`. Untested: the
+  chimney (two walls 2 m apart: inside-corner turns from its back wall),
+  climbing in the town (any 1 m wall pushed into for 0.15 s is grabbed;
+  in a 2 m tunnel there is no room to rise, so none), climbing with a
+  bundle or a pile haul. A demo script needs `jump` and `board` (G) to
+  lunge and let go.
+- **Notes from CL.3:** the demo's "running out and falling" now hurts
+  (about 15 m: 4 or 5 of 6) and a fall from 17.5 m or more kills, with a
+  2 s respawn at the spawn by the pillars; the soak should expect deaths
+  and respawns. Tuning: `safe_fall` and `fall_step` on the elder's
+  `climb`. The town's falls hurt only into dug shafts 5 m or deeper.
+- **Notes from CL.4:** `//kestrel/app:climbing_view_demo` already climbs
+  the west face (round the corner, over the 13.5 m ledge, a lunge, a fall
+  to the ledge) in 61 s: a start for the review video; it uses the new
+  `jump` op. Stick timings: the grab at 0.15 s, 1 m/s up, the mantle at
+  12.5 m on the 13.5 m pitch with about 17% of the wheel left. The pose and
+  wheel are tuned on the built-in exosuit rig; a styled rig with baked legs
+  (`ActorFootContacts`) is solved by the same IK but not looked at. Look at
+  the chimney (the silhouette should carry it) and the overhang in the
+  video. Step sounds play on sideways climbing (the gait clock counts the
+  body's flat move on a face).
+
+## CL.6 An open-world study
+
+- **Status:** open
+- **Why:** K12: huge maps reached by hash and streamed in and out don't
+  fit one list of columns hashed whole, map-sized fog grids, or a sim that
+  runs everything everywhere.
+- **What to do:** a written study, read-only on the code: regions keyed
+  by coordinates, a hash per region combined in a tree, streaming regions
+  in and out (sim and view), fog in regions, what the sim runs far from
+  players, saves and the net protocol; measured numbers from today's
+  volume (edit and hash costs by map size); options with trade-offs. It
+  becomes its own design page.
+- **Where:** `sim/src/volume.rs`, `app/src/fog.rs`, the save and net
+  code; a new design document.
+- **Found in:** climbing design.
+- **Notes from CL.1:** height is cheap where the data is spans (the
+  volume, its hash, nav floors, the light grid): a 40 m mountain adds a
+  span per column. What scales with height: the view's wall meshes (a
+  wall is banded per 0.5 m layer, so 80 slabs per tile side on a 40 m
+  face) and `VolumeLayout::apply`, which fills cell by cell. What scales
+  with map size: the volume hash (all columns, after every edit; 16 641
+  columns in the gym), the fog's grid (map-sized per level seen), and the
+  view's sight window, fixed at 64 tiles round the eye (`sight::WINDOW`,
+  half the gym's width; beyond it inside views are void). The camera's
+  near plane matters once ground is taller than the rig's 35 m distance.
+  `LAYOUT_EXTENTS` caps a volume at 256 m across.
+- **Notes from CL.2:** climbing reads only the held tile and the body's
+  columns (`Volume::spans`), so it is local; nothing in it scales with map
+  size.
+- **Notes from CL.3:** fall damage is local too (the avatar's own
+  `fall_top`, applied in housekeeping on landing).
+- **Notes from CL.4:** nothing in the view scales with map size: the pose,
+  wheel and silhouette read only the local avatar; the silhouette is one
+  extra blended draw per elder mesh.
+
+## Climbing while carrying
+
+- **Status:** open
+- **Why:** found in CL.2: an elder with a bundle or on a pile haul climbs
+  as freely as an empty-handed one; a haul's walk sets a route the climb
+  ignores, and a bundle's dock may be out of reach up a wall.
+- **What to do:** decide whether carrying stops grabbing (or drains the
+  wheel faster), and end or keep a haul when its walker grabs a face.
+- **Where:** `sim/src/settlement/climb.rs`, `piles.rs`.
+- **Found in:** CL.2.
+
+## The climbing pose on styled rigs
+
+- **Status:** open
+- **Why:** found in CL.4: the climbing IK (`character::climb_limb_targets`)
+  solves articulated arm and leg chains; a style whose legs are baked
+  whole (`ActorFootContacts`, no shin or foot joint) gets only the
+  fallback leg angles, and the targets are sized for the exosuit's 1.9 m.
+- **What to do:** solve baked legs as `actor_leg_targets` does, and size
+  the hand and foot targets by the rig's shoulder and hip heights.
+- **Where:** `app/src/character.rs`, `app/src/climb_view.rs`.
+- **Found in:** CL.4.
+
+## The gym's black faces
+
+- **Status:** open
+- **Why:** found in CL.4: with the sun fixed from the south-west, the
+  summit's east face (and the north faces) draw near black. The silhouette
+  only shows a climber hidden behind rock, so one climbing in plain sight
+  on such a face is a dark body on a black wall, readable by its ivory
+  blocks only.
+- **What to do:** a modest fill or ambient in the gym (or a sky light from
+  the opposite side), or height banding past 8 m (`volume_mesh::stone`);
+  check against the video in CL.5.
+- **Where:** `app/src/scene.rs` (lights), `app/src/volume_mesh.rs`.
+- **Found in:** CL.4.
+
+## Done
+
+### CL.4 Climbing in the view
+
+- **Status:** done (branch `kestrel-climbing`, PR to come with CL.5)
 - **Why:** K3, K4, K9.
 - **What to do:** a climbing pose (hands and feet on the face, a reach
   cycle), the pull-over and lunge; the stamina wheel by the elder
@@ -44,81 +156,62 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
   read better (see "A fall's own feedback"). `AvatarState::fall_top` is
   the fall's top while in the air, if the view wants a "this will hurt"
   cue.
+- **Done:** `app/src/climb_view.rs`, read from the drawn avatar's
+  `climbing` (so a joined client's predicted climb poses at once). The
+  pose: `Pose::climb` (`ClimbPose`: `Hold`, `Lunge`, `Mantle`, `Falling`)
+  takes over the whole body (`Pose::climbing`, upright, head up the face,
+  the weapon put away), and `character::climb_limb_targets` solves both
+  arms and legs onto the face by two-bone IK (`two_bone`, elbows out and
+  down, knees out, feet flat), blended at 32/s from last frame. The
+  hands hold 1.3–1.7 m and the feet 0.2–0.5 m over the feet, on the face's
+  plane (`face` = (radius + `GAP`) over the actor scale, 0.34 m); a reach
+  cycle (`ClimbClock`, 0.32 m a hand, 60% of it gripping) moves them in
+  diagonal pairs and advances only with the drawn body's move on the face
+  while `Hold` (hanging, lunging and pulling over leave it), so a held
+  hand stays put on the rock as the body climbs past it, and the reaching
+  hand leaves the rock only while moving. The lunge stretches both hands
+  its way (from `ClimbPhase::Lunge`'s up/side) with the feet trailing;
+  the pull-over puts the hands on the top past the edge, a knee up, then
+  the other foot, the chest leaning over; falling off a face (`Airborne`
+  with no climb, for a climber with no jump of its own) flails, harder
+  when it will hurt. The drawn position on a face eases toward the sim's
+  (`ClimbFollow`, 16/s, snapping over 2.5 m, finishing quickly once off)
+  with the heading, so a corner's 0.7 m wrap and quarter turn and the
+  mantle's lift-then-over read smoothly; the ground-step easing is off on
+  a face. Remote players get the pose too (no position easing). The wheel
+  (`Wheel`, `wheel`): a ring of 32 segments right of the body in screen
+  space, green; a spent part (a lunge's fifth) shows pale for 0.35 s and
+  eases away; under 30% it flashes red at 3 Hz; exhausted it is red until
+  full; full and off a face it hides after 0.8 s; it sits right of the
+  torso, clear of the health bar over the head (the gym's 6). In the air,
+  a fall that will hurt (`fall_top` - `flight.support` ≥ `safe_fall`) shows
+  a pulsing red "!" in it. The silhouette (`SilhouetteMaterial`,
+  `shaders/silhouette.wesl`): each mesh under the local player gets a twin
+  child (`silhouettes`) drawn blended after the opaque pass with the depth
+  test reversed (`Less`, no depth write), discarded unless the depth
+  prepass there is over 1.3 m nearer the camera than the body (so the
+  elder's own limbs don't show it), flat cyan; volume scenes only. A
+  hurting fall now has its own feedback ("A fall's own feedback", done
+  here): `legacy::Event::Fell`, dust puffs round the feet (more the harder,
+  up to 4), the land and stone sounds and a shake scaled by the damage;
+  no blood. The dark faces: not changed. The faces in shade toward the
+  camera read dark brown, but the summit's east face is near black; a climber
+  hidden behind rock shows by the silhouette whatever the light, and one in
+  plain sight on a black face keeps the exosuit's ivory blocks, so no fill
+  light was added (see "The gym's black faces"). A `jump` demo op (Space, `CommandKind::Jump`) and
+  `//kestrel/app:climbing_view_demo` (up the west face, round the corner,
+  over the 13.5 m ledge, a lunge, the silhouette from the far side, a
+  hurting fall). Tests: `climb_view` (the reach cycle advancing only while
+  moving; hands and feet in diagonal pairs on the face; the lunge and the
+  pull-over; the pose following the sim's climb state, including whether a
+  fall will hurt; the wheel's states; the corner easing; the silhouette
+  twins for the player only), `climbing_hands_and_feet_reach_the_face`
+  (the exosuit rig's hands and feet reach their targets on the face, no
+  joint or the chest in the rock), `a_fall_that_hurts_lands_with_a_thud_of_its_own`.
 
-## CL.5 Soak, tuning and demo
+### A fall's own feedback
 
-- **Status:** open
-- **Why:** the exploration is reviewed by video.
-- **What to do:** a soak in the gym (random climbing, `validate` every
-  tick); tune speeds, stamina and falls; a demo video climbing a pillar,
-  the 40 m face with two rests, a corner, an overhang, a lunge, running
-  out and falling; the full suite; a `docs/test-time.md` row; docs and
-  `CLIMBING.md`'s status; a "Climb the gym" section in
-  `todo/playtest-review.md`.
-- **Where:** sim tests, `app/demos/`, docs.
-- **Found in:** climbing design.
-- **Tests:** the soak; the full suite.
-- **Notes from CL.1:** `climbing_gym_demo` is a walk-round with
-  `camera_zoom` and `camera_rotate`; a script is capped at 120 s
-  (`max_frames <= fps * 120`). The renders took 100 to 195 s locally.
-- **Notes from CL.2:** numbers in `elder.ron`'s `climb`. Untested: the
-  chimney (two walls 2 m apart: inside-corner turns from its back wall),
-  climbing in the town (any 1 m wall pushed into for 0.15 s is grabbed;
-  in a 2 m tunnel there is no room to rise, so none), climbing with a
-  bundle or a pile haul. A demo script needs `jump` and `board` (G) to
-  lunge and let go.
-- **Notes from CL.3:** the demo's "running out and falling" now hurts
-  (about 15 m: 4 or 5 of 6) and a fall from 17.5 m or more kills, with a
-  2 s respawn at the spawn by the pillars; the soak should expect deaths
-  and respawns. Tuning: `safe_fall` and `fall_step` on the elder's
-  `climb`. The town's falls hurt only into dug shafts 5 m or deeper.
-
-## CL.6 An open-world study
-
-- **Status:** open
-- **Why:** K12: huge maps reached by hash and streamed in and out don't
-  fit one list of columns hashed whole, map-sized fog grids, or a sim that
-  runs everything everywhere.
-- **What to do:** a written study, read-only on the code: regions keyed
-  by coordinates, a hash per region combined in a tree, streaming regions
-  in and out (sim and view), fog in regions, what the sim runs far from
-  players, saves and the net protocol; measured numbers from today's
-  volume (edit and hash costs by map size); options with trade-offs. It
-  becomes its own design page.
-- **Where:** `sim/src/volume.rs`, `app/src/fog.rs`, the save and net
-  code; a new design document.
-- **Found in:** climbing design.
-- **Notes from CL.1:** height is cheap where the data is spans (the
-  volume, its hash, nav floors, the light grid): a 40 m mountain adds a
-  span per column. What scales with height: the view's wall meshes (a
-  wall is banded per 0.5 m layer, so 80 slabs per tile side on a 40 m
-  face) and `VolumeLayout::apply`, which fills cell by cell. What scales
-  with map size: the volume hash (all columns, after every edit; 16 641
-  columns in the gym), the fog's grid (map-sized per level seen), and the
-  view's sight window, fixed at 64 tiles round the eye (`sight::WINDOW`,
-  half the gym's width; beyond it inside views are void). The camera's
-  near plane matters once ground is taller than the rig's 35 m distance.
-  `LAYOUT_EXTENTS` caps a volume at 256 m across.
-- **Notes from CL.2:** climbing reads only the held tile and the body's
-  columns (`Volume::spans`), so it is local; nothing in it scales with map
-  size.
-- **Notes from CL.3:** fall damage is local too (the avatar's own
-  `fall_top`, applied in housekeeping on landing).
-
-## Climbing while carrying
-
-- **Status:** open
-- **Why:** found in CL.2: an elder with a bundle or on a pile haul climbs
-  as freely as an empty-handed one; a haul's walk sets a route the climb
-  ignores, and a bundle's dock may be out of reach up a wall.
-- **What to do:** decide whether carrying stops grabbing (or drains the
-  wheel faster), and end or keep a haul when its walker grabs a face.
-- **Where:** `sim/src/settlement/climb.rs`, `piles.rs`.
-- **Found in:** CL.2.
-
-## A fall's own feedback
-
-- **Status:** open
+- **Status:** done in CL.4 (branch `kestrel-climbing`)
 - **Why:** found in CL.3: a hurting fall reuses a ghoul's hit (its
   sound, blood and shake, `legacy` maps `Event::Fell` to `ThreatSwing`),
   so it sounds like a blow and the blood sprays from nowhere.
@@ -127,8 +220,8 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
   (`AvatarState::fall_top`).
 - **Where:** `app/src/legacy.rs`, `app/src/settlement.rs`, `app/src/sound`.
 - **Found in:** CL.3.
+- **Done:** in CL.4: `legacy::Event::Fell`; dust, a thud and a shake by the damage, no blood; the falling pose flails, harder when it will hurt, and a red "!" in the wheel warns in the air.
 
-## Done
 
 ### CL.3 Falls hurt
 

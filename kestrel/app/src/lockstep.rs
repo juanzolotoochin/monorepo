@@ -950,6 +950,8 @@ pub struct VisualGroundStep {
     height: Option<f32>,
     agent: Option<u16>,
     scene: Option<usize>,
+    /// On a face the drawn climber eases toward the sim (CL.4).
+    climb: crate::climb_view::ClimbFollow,
 }
 
 /// Places the player where the simulation has the avatar, between ticks. A
@@ -1020,11 +1022,12 @@ pub fn follow_avatar(
         || ground_step.scene != Some(scene.index)
         || start.distance(end) > 1.5
         || predicted.as_ref().is_some_and(|drawn| drawn.snapped || drawn.knockback_snapped);
+    let on_face = to_avatar.climbing.climb.is_some();
     position.y = crate::character::visual_step_height(
         if reset_step { None } else { ground_step.height },
         position.y,
         time.delta_secs(),
-        !to_avatar.flight.airborne && matches!(to_avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+        !on_face && !to_avatar.flight.airborne && matches!(to_avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
     );
     ground_step.height = Some(position.y);
     ground_step.agent = Some(index);
@@ -1045,9 +1048,11 @@ pub fn follow_avatar(
     }
     let motion = crate::character::motion_profile(&scene.pack);
     let previous = player.translation;
+    let heading = from.body.heading.to_f32() + angle_between(from.body.heading.to_f32(), to.body.heading.to_f32()) * alpha;
+    // A climber's corner wrap and pull-over jump in a tick: ease them.
+    let (position, heading) = ground_step.climb.follow(position, heading, time.delta_secs(), on_face);
     let teleport = previous.distance(position) > 1.5;
     player.translation = position;
-    let heading = from.body.heading.to_f32() + angle_between(from.body.heading.to_f32(), to.body.heading.to_f32()) * alpha;
     player.rotation = Quat::from_rotation_y(heading);
     let velocity = |s: &sim::settlement::AgentState| Vec3::new(s.body.velocity.x.to_f32(), 0.0, s.body.velocity.y.to_f32());
     controls.velocity = velocity(a);

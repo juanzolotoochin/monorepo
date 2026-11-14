@@ -591,6 +591,11 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             send(world, CommandKind::Board { agent });
             Ok(Pending::Applied)
         }
+        Command::Jump => {
+            let agent = player(world).ok_or("No player")?;
+            send(world, CommandKind::Jump { agent });
+            Ok(Pending::Applied)
+        }
         Command::Drive { direction, run } => {
             if direction.iter().any(|v| !v.is_finite()) || direction[0].hypot(direction[1]) > 1.001 {
                 return Err("Drive needs a finite direction of length at most 1".into());

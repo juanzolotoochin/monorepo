@@ -22,7 +22,7 @@ rust_binary(
     name = "demo",
     srcs = glob(["src/**/*.rs"]),
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
-    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/cutaway.wesl", "shaders/cutaway_prepass.wesl", "shaders/fog_dressing.wesl", "shaders/grass.wesl"] + glob(["vfx/*.ron"]),
+    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/cutaway.wesl", "shaders/cutaway_prepass.wesl", "shaders/fog_dressing.wesl", "shaders/grass.wesl", "shaders/silhouette.wesl"] + glob(["vfx/*.ron"]),
     edition = "2021",
     link_deps = select({
         "@platforms//cpu:wasm32": [],
@@ -270,6 +270,15 @@ filegroup(
     name = "climbing_gym_demo_video",
     srcs = [":climbing_gym_demo"],
     output_group = "video",
+)
+
+# Climbing in the view (CL.4): up the gym's west face round a corner, over
+# the ledge, a lunge, the silhouette from the far side and a fall.
+game_demo(
+    name = "climbing_view_demo",
+    game = ":demo",
+    script = "demos/climbing_view.json",
+    tags = ["manual"],
 )
 
 game_demo(

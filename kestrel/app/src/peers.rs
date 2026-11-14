@@ -30,6 +30,8 @@ pub struct Peer {
     heard: u64,
     motion: MotionState,
     visual_height: Option<f32>,
+    /// The reach cycle on a face (CL.4).
+    climb: crate::climb_view::ClimbClock,
 }
 
 impl Peer {
@@ -145,7 +147,8 @@ pub fn update(
             if from.distance(to) > 1.5 { None } else { peer.visual_height },
             position.y,
             time.delta_secs(),
-            !avatar.flight.airborne
+            avatar.climbing.climb.is_none()
+                && !avatar.flight.airborne
                 && matches!(avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
         );
         peer.visual_height = Some(position.y);
@@ -194,6 +197,9 @@ pub fn update(
             }
         }
         let dig = avatar.dig.as_ref().map(|d| dig_age(ticks, d));
+        let holding = avatar.climbing.climb.is_some_and(|c| c.phase == sim::settlement::climb::ClimbPhase::Hold);
+        peer.climb.follow(*transform, time.delta_secs(), holding);
+        let climb = crate::climb_view::climb_pose(avatar, scene.player(), *transform, ticks, &peer.climb, |p| mirror.to_view(p));
         let pose = Pose {
                 motion: voxel_assets::CharacterMotion {
                     step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
@@ -217,6 +223,7 @@ pub fn update(
                 ),
                 attack,
                 dig,
+                climb,
             };
         crate::character::pose_body(*transform, pose, |point| service.ground_height(point), false,
             time.delta_secs(), contacts.as_deref(), children.iter_descendants(entity), &mut joints);
@@ -263,6 +270,7 @@ pub fn update(
                     heard: 0,
                     motion: MotionState::default(),
                     visual_height: None,
+                    climb: Default::default(),
                 },
             );
         });
@@ -398,7 +406,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         assert!(pose.motion.plant_feet);
         let mut state = bevy::ecs::system::SystemState::<(crate::character::Joints, Query<&Children>)>::new(world);

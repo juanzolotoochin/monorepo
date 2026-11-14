@@ -101,8 +101,9 @@ regions reached by hash, streaming in and out.
   blow, so a dead elder comes back at home 2 s later. Only where players
   have health: the town (6) and the gym, which now gives its elder 6 (a
   scene's `player_health`, for a scene without a scenario); in the Tunnel
-  Lab, with none, falls still don't hurt. The view shows a hurting fall as
-  a hit from nowhere (the hurt sound, blood, the shake).
+  Lab, with none, falls still don't hurt. The view shows a hurting fall
+  with its own thud since CL.4: dust round the feet, the landing sound and
+  a shake by the damage, and in the air a red "!" in the wheel.
 
 ### K8. No glider yet
 
@@ -114,6 +115,9 @@ regions reached by hash, streaming in and out.
 - Z/C as today, plus a silhouette of the elder drawn through any rock in
   front of them. The gym zooms out further, to see the whole 40 m face.
   No automatic camera moves.
+- Settled in CL.4: the silhouette is flat cyan, drawn where rock stands
+  more than 1.3 m nearer the camera than the body, in volume scenes. The
+  wheel is a ring right of the body, in screen space (`climb_view.rs`).
 
 ### K10. Scenes up to 64 m
 

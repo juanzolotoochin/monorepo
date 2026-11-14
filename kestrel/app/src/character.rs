@@ -299,9 +299,13 @@ impl service::Service for Avatar {
                     .chain()
                     .run_if(active.clone()),
             )
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                crate::climb_view::silhouettes.run_if(crate::control::rendered).run_if(active.clone()),
+            )
             .add_systems(
                 PostUpdate,
-                crate::effects::blade_trail
+                (crate::effects::blade_trail, crate::climb_view::wheel)
                     .after(bevy::transform::TransformSystems::Propagate)
                     .run_if(crate::control::rendered)
                     .run_if(active),
@@ -324,6 +328,7 @@ pub fn animate_character(
     mut joints: Joints,
     children: Query<&Children>,
     mut motion: Local<MotionState>,
+    (mirror, mut clock): (Option<Res<crate::lockstep::WorldMirror>>, Local<crate::climb_view::ClimbClock>),
 ) {
     if !viewer.active && feedback.hit_stop > 0.0
         && !controls
@@ -400,7 +405,15 @@ pub fn animate_character(
         attack: controls.attack,
         dig,
         motion: local_profile,
+        climb: None,
     };
+    // Climbing (CL.4): the drawn avatar's state, for a climber.
+    if let (Some(drawn), Some(scene), Some(mirror), false) = (drawn, scene.as_ref(), mirror.as_ref(), viewer.active) {
+        let avatar = drawn.avatar();
+        let holding = avatar.climbing.climb.is_some_and(|c| c.phase == sim::settlement::climb::ClimbPhase::Hold);
+        clock.follow(*player.1, time.delta_secs(), holding);
+        pose.climb = crate::climb_view::climb_pose(avatar, scene.player(), *player.1, drawn.time, &clock, |p| mirror.to_view(p));
+    }
     if viewer.active {
         pose.jump = studio_jump;
         pose.airborne = airborne;
@@ -442,15 +455,21 @@ pub(crate) fn pose_body(
     joints: &mut Joints,
 ) {
     let terrain = foot_terrain(root, &pose, ground);
-    if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
+    if pose.climb.is_none() && pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
         pose.step_pitch = step_body_pitch(&pose, terrain.ground);
     }
     let mut snapshot = HashMap::new();
     let mut root_entity = None;
+    // On a face the limbs are solved onto the rock below, from where they
+    // were last frame.
+    let on_face = pose.climb.is_some_and(|c| !matches!(c.stage, crate::climb_view::ClimbStage::Falling { .. }));
     for entity in body {
         let Ok((entity, part, mut transform, parent)) = joints.get_mut(entity) else { continue };
         let target = pose.place(part.kind, part.rest);
-        if exact || pose.motion.plant_feet
+        let limb = matches!(part.kind, PartKind::Arm(_) | PartKind::Forearm(_) | PartKind::Hand(_) | PartKind::Leg(_) | PartKind::Shin(_) | PartKind::Foot(_));
+        if on_face && limb && !exact {
+            // Kept as it was; `climb_limb_targets` moves it.
+        } else if exact || pose.climb.is_none() && pose.motion.plant_feet
             && matches!(part.kind, PartKind::Body)
             && pose.speed > 0.6
             && pose.jump.is_none()
@@ -470,7 +489,19 @@ pub(crate) fn pose_body(
     // smoothing so a planted ankle stays fixed against the
     // traveling ground instead of lagging behind the hip animation.
     let Some(root_entity) = root_entity else { return };
-    if pose.motion.plant_feet
+    if let Some(climb) = pose.climb.filter(|_| on_face) {
+        let weight = if exact { 1.0 } else { 1.0 - (-32.0 * dt.clamp(0.0, 0.05)).exp() };
+        for (entity, target) in climb_limb_targets(&snapshot, root_entity, &climb) {
+            if let Ok((_, _, mut transform, _)) = joints.get_mut(entity) {
+                let current = *transform;
+                transform.translation = current.translation.lerp(target.translation, weight);
+                transform.rotation = current.rotation.slerp(target.rotation, weight);
+            }
+        }
+        return;
+    }
+    if pose.climb.is_none()
+        && pose.motion.plant_feet
         && pose.speed > 0.05
         && pose.jump.is_none()
         && !pose.airborne
@@ -490,6 +521,92 @@ pub(crate) fn pose_body(
 }
 
 pub(crate) type JointSnapshot = (PartKind, Transform, Transform, Option<Entity>);
+
+/// The child of `parent` among `joints` whose kind matches.
+fn child_joint(joints: &HashMap<Entity, JointSnapshot>, parent: Entity, matches: impl Fn(PartKind) -> bool) -> Option<(Entity, JointSnapshot)> {
+    joints.iter().find(|(_, (kind, _, _, p))| *p == Some(parent) && matches(*kind)).map(|(e, j)| (*e, *j))
+}
+
+/// A rotation taking the frame of `rest` (a bone's direction) and
+/// `rest_side` (a direction across it) onto `along` and `side`.
+fn aim(rest: Vec3, rest_side: Vec3, along: Vec3, side: Vec3) -> Quat {
+    let basis = |y: Vec3, hint: Vec3| {
+        let y = y.normalize_or(Vec3::NEG_Y);
+        let z = (hint - y * hint.dot(y)).normalize_or(y.any_orthonormal_vector());
+        Quat::from_mat3(&Mat3::from_cols(y.cross(z), y, z))
+    };
+    basis(along, side) * basis(rest, rest_side).inverse()
+}
+
+/// Two-bone IK: from a joint at `origin` (rig space) with parent rotation
+/// `parent`, bones `upper` and `lower` (each the next joint's rest
+/// translation in its parent) reaching for `target`, the middle joint
+/// bending toward `pole`. The two joints' local rotations.
+pub(crate) fn two_bone(parent: Quat, origin: Vec3, target: Vec3, upper: Vec3, lower: Vec3, pole: Vec3) -> (Quat, Quat) {
+    let (a, b) = (upper.length(), lower.length());
+    let to = target - origin;
+    let d = to.length().clamp((a - b).abs() + 0.001, a + b - 0.001);
+    let dir = to.normalize_or(Vec3::NEG_Y);
+    let cos = ((a * a + d * d - b * b) / (2.0 * a * d)).clamp(-1.0, 1.0);
+    let bend = (pole - dir * pole.dot(dir)).normalize_or(dir.any_orthonormal_vector());
+    let middle = origin + (dir * cos + bend * (1.0 - cos * cos).sqrt()) * a;
+    let end = origin + dir * d;
+    let (upper_dir, lower_dir) = ((middle - origin) / a, (end - middle).normalize_or(dir));
+    let upper_world = aim(upper, Vec3::Z, upper_dir, -bend);
+    let lower_world = aim(lower, Vec3::Z, lower_dir, upper_world * Vec3::Z);
+    (parent.inverse() * upper_world, upper_world.inverse() * lower_world)
+}
+
+/// On a face (CL.4): the arms and legs solved so the hands and feet are
+/// where `climb_view::climb_targets` puts them on the rock, the elbows out
+/// and down, the knees out. Hands carry on the forearm; feet flat to the
+/// face.
+pub(crate) fn climb_limb_targets(
+    joints: &HashMap<Entity, JointSnapshot>,
+    player: Entity,
+    climb: &crate::climb_view::ClimbPose,
+) -> Vec<(Entity, Transform)> {
+    let mut targets = Vec::new();
+    let Some((&body_entity, &(_, _, body, _))) = joints
+        .iter()
+        .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
+    else {
+        return targets;
+    };
+    let ends = crate::climb_view::climb_targets(climb);
+    let (shoulders, shoulder_frame) = match child_joint(joints, body_entity, |k| matches!(k, PartKind::Chest)) {
+        Some((chest, (_, _, transform, _))) => (chest, body.mul_transform(transform)),
+        None => (body_entity, body),
+    };
+    for (index, side) in [-1.0_f32, 1.0].into_iter().enumerate() {
+        let same = move |s: f32| s == side;
+        if let Some((arm, (_, arm_rest, arm_now, _))) = child_joint(joints, shoulders, |k| matches!(k, PartKind::Arm(s) if same(s))) {
+            if let Some((fore, (_, fore_rest, fore_now, _))) = child_joint(joints, arm, |k| matches!(k, PartKind::Forearm(s) if same(s))) {
+                if let Some((hand, (_, hand_rest, hand_now, _))) = child_joint(joints, fore, |k| matches!(k, PartKind::Hand(s) if same(s))) {
+                    let origin = shoulder_frame.transform_point(arm_rest.translation);
+                    let (upper, lower) = two_bone(shoulder_frame.rotation, origin, ends[index], fore_rest.translation, hand_rest.translation, Vec3::new(side * 0.8, -0.6, -0.5));
+                    targets.push((arm, Transform { translation: arm_rest.translation, rotation: upper, scale: arm_now.scale }));
+                    targets.push((fore, Transform { translation: fore_rest.translation, rotation: lower, scale: fore_now.scale }));
+                    targets.push((hand, Transform { translation: hand_rest.translation, rotation: Quat::IDENTITY, scale: hand_now.scale }));
+                }
+            }
+        }
+        if let Some((leg, (_, leg_rest, leg_now, _))) = child_joint(joints, body_entity, |k| matches!(k, PartKind::Leg(s) if same(s))) {
+            if let Some((shin, (_, shin_rest, shin_now, _))) = child_joint(joints, leg, |k| matches!(k, PartKind::Shin(s) if same(s))) {
+                if let Some((foot, (_, foot_rest, foot_now, _))) = child_joint(joints, shin, |k| matches!(k, PartKind::Foot(s) if same(s))) {
+                    let origin = body.transform_point(leg_rest.translation);
+                    let (upper, lower) = two_bone(body.rotation, origin, ends[2 + index], shin_rest.translation, foot_rest.translation, Vec3::new(side * 0.9, 0.0, 0.35));
+                    let shin_world = body.rotation * upper * lower;
+                    targets.push((leg, Transform { translation: leg_rest.translation, rotation: upper, scale: leg_now.scale }));
+                    targets.push((shin, Transform { translation: shin_rest.translation, rotation: lower, scale: shin_now.scale }));
+                    // Toes to the face, the sole level.
+                    targets.push((foot, Transform { translation: foot_rest.translation, rotation: shin_world.inverse(), scale: foot_now.scale }));
+                }
+            }
+        }
+    }
+    targets
+}
 
 pub(crate) fn grounded_foot_targets(
     joints: &HashMap<Entity, JointSnapshot>,
@@ -722,6 +839,9 @@ pub struct Pose {
     pub attack: Option<Attack>,
     /// Seconds into a dig.
     pub dig: Option<f32>,
+    /// On a face, pulling over, lunging or falling off one (CL.4,
+    /// `climb_view`): it takes over the whole body.
+    pub climb: Option<crate::climb_view::ClimbPose>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -893,6 +1013,9 @@ fn arm_drive(stride: f32, side: f32) -> f32 {
 impl Pose {
     /// A part's rest transform, posed.
     pub fn place(&self, kind: PartKind, rest: Transform) -> Transform {
+        if let Some(climb) = self.climb {
+            return self.climbing(kind, rest, climb);
+        }
         // A laser shot is an upper-body action. Keep the body's support motion
         // and every leg joint on the same locomotion pose through the shot.
         if self.attack.is_some_and(|attack| attack.weapon == content::scenario::Weapon::Laser)
@@ -1264,6 +1387,77 @@ impl Pose {
         transform
     }
 
+    /// Climbing (CL.4): facing the rock, leaning into it, looking up the
+    /// face; the limbs here are only a fallback, `climb_limb_targets` puts
+    /// the hands and feet on the face. Falling off a face flails.
+    fn climbing(&self, kind: PartKind, rest: Transform, climb: crate::climb_view::ClimbPose) -> Transform {
+        use crate::climb_view::ClimbStage;
+        let mut transform = rest;
+        let sway = climb.reach.sin() * climb.moving;
+        let (lean, look) = match climb.stage {
+            ClimbStage::Hold => (0.0, -0.38),
+            ClimbStage::Lunge { progress, .. } => (0.02 - 0.08 * (progress * std::f32::consts::PI).sin(), -0.5),
+            ClimbStage::Mantle { progress, .. } => {
+                // Over the top: the chest goes over the edge, then up.
+                let over = smooth(progress / 0.55) * (1.0 - smooth((progress - 0.8) / 0.2));
+                (0.55 * over, -0.38 + 0.3 * over)
+            }
+            ClimbStage::Falling { .. } => (-0.25, 0.35),
+        };
+        if let ClimbStage::Falling { time, hurts } = climb.stage {
+            let flail = (if hurts { 1.6 } else { 1.0 }) * (time * 11.0).sin();
+            let wave = |side: f32| (time * 13.0 + side).sin();
+            match kind {
+                PartKind::Body => {
+                    transform.rotation = Quat::from_rotation_x(lean) * Quat::from_rotation_z(0.06 * flail);
+                }
+                PartKind::Chest => transform.rotation = Quat::from_rotation_x(-0.10),
+                PartKind::Head => transform.rotation = Quat::from_rotation_x(look),
+                PartKind::Arm(side) => {
+                    transform.rotation = Quat::from_rotation_z(side * (2.1 + 0.25 * wave(side)))
+                        * Quat::from_rotation_x(-0.3 + 0.2 * wave(-side));
+                }
+                PartKind::Forearm(side) => transform.rotation = Quat::from_rotation_x(-0.6 - 0.25 * wave(side)),
+                PartKind::Leg(side) => {
+                    transform.rotation = Quat::from_rotation_x(-0.55 + 0.35 * wave(side * 2.0)) * Quat::from_rotation_z(0.12 * side);
+                }
+                PartKind::Shin(side) => transform.rotation = Quat::from_rotation_x(0.9 + 0.3 * wave(side * 2.0 + 1.0)),
+                PartKind::Foot(_) => transform.rotation = Quat::from_rotation_x(0.25),
+                PartKind::Hand(_) | PartKind::Knee(_) => {}
+                // Put away while climbing or falling.
+                PartKind::WeaponGrip => transform.scale = Vec3::splat(1e-3),
+            }
+            return transform;
+        }
+        match kind {
+            PartKind::Body => {
+                transform.translation.y += self.breathe * 0.3 - 0.04 * climb.moving * (2.0 * climb.reach).cos().abs();
+                // Off the rock a little: the chest plate stands 3 cm off it.
+                transform.translation.z -= 0.03;
+                transform.translation.x += 0.04 * sway;
+                transform.rotation = Quat::from_rotation_x(lean) * Quat::from_rotation_z(-0.05 * sway);
+            }
+            PartKind::Chest => {
+                transform.rotation = Quat::from_rotation_y(0.08 * sway);
+            }
+            PartKind::Head => transform.rotation = Quat::from_rotation_x(look),
+            PartKind::Arm(side) => {
+                transform.rotation = Quat::from_rotation_z(side * 0.25) * Quat::from_rotation_x(-2.5);
+            }
+            PartKind::Forearm(_) => transform.rotation = Quat::from_rotation_x(-0.5),
+            PartKind::Hand(_) => transform.rotation = Quat::IDENTITY,
+            PartKind::Leg(side) => {
+                transform.rotation = Quat::from_rotation_x(-0.6) * Quat::from_rotation_z(0.25 * side);
+            }
+            PartKind::Shin(_) => transform.rotation = Quat::from_rotation_x(0.8),
+            PartKind::Foot(_) => transform.rotation = Quat::from_rotation_x(-0.2),
+            PartKind::Knee(_) => {}
+            // Put away on a face: no blade in the rock.
+            PartKind::WeaponGrip => transform.scale = Vec3::splat(1e-3),
+        }
+        transform
+    }
+
     /// Digging: crouched over the tile, feet apart, chopping into the ground
     /// in front, leaning into each strike.
     fn digging(&self, kind: PartKind, rest: Transform, age: f32) -> Transform {
@@ -1319,6 +1513,62 @@ impl Pose {
 mod tests {
     use super::*;
     use crate::combat::Attack;
+
+    /// On a face the elder's (exosuit) rig puts its hands and feet where
+    /// the climb puts them: on the face, over the shoulders and under the
+    /// hips, and nothing of the chest in the rock.
+    #[test]
+    fn climbing_hands_and_feet_reach_the_face() {
+        let actor = crate::actor::for_player("elder");
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut joints = HashMap::new();
+        let climb = crate::climb_view::ClimbPose { stage: crate::climb_view::ClimbStage::Hold, reach: 1.0, moving: 1.0, travel: Vec2::Y, face: 0.34 };
+        let pose = Pose {
+            motion: voxel_assets::CharacterMotion::default(),
+            stride: 0.0, speed: 0.0, turn: 0.0, aim_yaw: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
+            jump: None, attack: None, dig: None, climb: Some(climb),
+        };
+        let mut pending = vec![(&actor.root, root)];
+        while let Some((joint, parent)) = pending.pop() {
+            let Some(kind) = crate::actor::kind(joint.part) else { continue };
+            let entity = world.spawn_empty().id();
+            let rest = Transform::from_translation(Vec3::from_array(joint.at));
+            joints.insert(entity, (kind, rest, pose.place(kind, rest), Some(parent)));
+            pending.extend(joint.joints.iter().map(|j| (j, entity)));
+        }
+        for (entity, target) in climb_limb_targets(&joints, root, &climb) {
+            joints.get_mut(&entity).unwrap().2 = target;
+        }
+        let global = |entity: Entity| {
+            let mut transform = Transform::IDENTITY;
+            let mut at = Some(entity);
+            while let Some(e) = at.filter(|e| *e != root) {
+                transform = joints[&e].2.mul_transform(transform);
+                at = joints[&e].3;
+            }
+            transform
+        };
+        let find = |want: fn(PartKind) -> bool| joints.iter().filter(|(_, j)| want(j.0)).map(|(e, j)| (*e, j.0)).collect::<Vec<_>>();
+        let ends = crate::climb_view::climb_targets(&climb);
+        for (entity, kind) in find(|k| matches!(k, PartKind::Hand(_) | PartKind::Foot(_))) {
+            let (index, side) = match kind {
+                PartKind::Hand(side) => (if side < 0.0 { 0 } else { 1 }, side),
+                PartKind::Foot(side) => (if side < 0.0 { 2 } else { 3 }, side),
+                _ => unreachable!(),
+            };
+            let at = global(entity).translation;
+            assert!(at.distance(ends[index]) < 0.02, "{kind:?} at {at}, wanted {}", ends[index]);
+            assert!(at.z < climb.face && at.x * side > 0.0, "{kind:?} at {at}");
+        }
+        for (entity, kind) in find(|k| matches!(k, PartKind::Arm(_) | PartKind::Forearm(_) | PartKind::Leg(_) | PartKind::Shin(_))) {
+            let at = global(entity).translation;
+            assert!(at.z < climb.face, "{kind:?} joint in the rock: {at}");
+        }
+        let (chest, _) = find(|k| matches!(k, PartKind::Chest))[0];
+        let front = global(chest).transform_point(Vec3::new(0.0, 0.35, 0.31));
+        assert!(front.z < climb.face, "the chest plate in the rock: {front}");
+    }
 
     #[test]
     fn visual_step_height_eases_walkable_ledge_and_snaps_jumps() {
@@ -1410,7 +1660,7 @@ mod tests {
                             },
                             stride: std::f32::consts::TAU * frame as f32 / 60.0,
                             speed, turn, aim_yaw: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
-                            jump: None, attack: None, dig: None,
+                            jump: None, attack: None, dig: None, climb: None,
                         };
                         let body = pose.place(PartKind::Body, body_rest);
                         let leg = pose.place(PartKind::Leg(side), leg_rest);
@@ -1461,7 +1711,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let body_rest = Transform::from_xyz(0.0, 0.94, 0.0);
         let chest_rest = Transform::from_xyz(0.0, 0.34, 0.0);
@@ -1507,7 +1757,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let rest = Transform::from_xyz(0.0, -0.29, 0.015);
         for frame in 0..33 {
@@ -1538,7 +1788,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let sample = |pose: &Pose| {
             let joints = [
@@ -1619,7 +1869,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let leg = Transform::from_xyz(0.14, -0.36, 0.0);
         let shin = Transform::from_xyz(0.0, -0.27, 0.0);
@@ -1677,7 +1927,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let body_rest = Transform::from_xyz(0.0, 0.94, 0.0);
         let leg = Transform::from_xyz(0.14, -0.36, 0.0);
@@ -1782,7 +2032,7 @@ mod tests {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 0.8, speed: 0.7, turn: 0.0, aim_yaw: 0.0,
             breathe: 0.0, step_pitch: 0.0, airborne: false,
-            jump: None, attack: None, dig: None,
+            jump: None, attack: None, dig: None, climb: None,
         };
         let leg_rest = Transform::from_xyz(0.2, -0.3, 0.0);
         let chest_rest = Transform::IDENTITY;
@@ -1800,7 +2050,7 @@ mod tests {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 1.1, speed: 0.8, turn: 0.0, aim_yaw: 0.3,
             breathe: 0.0, step_pitch: 0.0, airborne: false,
-            jump: None, attack: None, dig: None,
+            jump: None, attack: None, dig: None, climb: None,
         };
         let rest = Transform::IDENTITY;
         let lower = [PartKind::Body, PartKind::Leg(-1.0), PartKind::Leg(1.0),
@@ -1831,7 +2081,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let walking_y = pose.place(PartKind::Body, rest_body).translation.y;
         pose.speed = 1.4;
@@ -1861,7 +2111,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let body = Transform::from_xyz(0.0, 0.94, 0.0);
         let idle = pose.place(PartKind::Body, body);
@@ -1902,7 +2152,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let left = pose.place(PartKind::Arm(-1.0), rest);
         let right = pose.place(PartKind::Arm(1.0), rest);
@@ -1937,7 +2187,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let walking = pose.place(PartKind::Body, rest);
         let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
@@ -1968,7 +2218,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         for age in [
             0.0,
