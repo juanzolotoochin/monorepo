@@ -281,6 +281,37 @@ game_demo(
     tags = ["manual"],
 )
 
+# The climbing review (CL.5), in two clips of at most 120 s: the 40 m west
+# face in three pitches with two rests, a lunge, the silhouette from the
+# far side; and a tour: a pillar round its corner, the chimney's walls,
+# the inside corner, a wheel run out with lunges and the fall that hurts,
+# the overhang from below.
+game_demo(
+    name = "climbing_face_demo",
+    game = ":demo",
+    script = "demos/climbing_face.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "climbing_face_demo_video",
+    srcs = [":climbing_face_demo"],
+    output_group = "video",
+)
+
+game_demo(
+    name = "climbing_tour_demo",
+    game = ":demo",
+    script = "demos/climbing_tour.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "climbing_tour_demo_video",
+    srcs = [":climbing_tour_demo"],
+    output_group = "video",
+)
+
 game_demo(
     name = "surprise_demo",
     game = ":demo",

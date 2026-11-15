@@ -143,7 +143,7 @@ fn center(tile: (i32, i32)) -> FxVec2 {
 }
 
 /// The face's plane, as a coordinate along its normal.
-fn plane(tile: (i32, i32), face: Face) -> Fx {
+pub(super) fn plane(tile: (i32, i32), face: Face) -> Fx {
     center(tile).dot(face.normal()) + Fx::HALF
 }
 
@@ -159,14 +159,14 @@ fn clear(volume: &Volume, tile: (i32, i32), feet: Fx) -> bool {
 }
 
 /// Whether a body of `radius` at `p` with its feet at `feet` is in no rock.
-fn body_clear(volume: &Volume, p: FxVec2, feet: Fx, radius: Fx) -> bool {
+pub(super) fn body_clear(volume: &Volume, p: FxVec2, feet: Fx, radius: Fx) -> bool {
     points(p, radius).iter().all(|&q| clear(volume, Terrain::pit_tile(q), feet))
 }
 
 /// The top (as a layer) of the rock of `tile` a climber with its feet at
 /// `feet` holds: the highest span reaching over the feet that starts at or
 /// under the hands. Nothing: no rock to hold there.
-fn hold(volume: &Volume, tile: (i32, i32), feet: Fx) -> Option<i32> {
+pub(super) fn hold(volume: &Volume, tile: (i32, i32), feet: Fx) -> Option<i32> {
     let (lo, hands) = (layer_at(feet + ROUNDING), layer_at(feet + HANDS));
     volume.spans(tile).iter().rev().find(|s| s.bottom <= hands && s.top > lo).map(|s| s.top)
 }
@@ -309,9 +309,13 @@ fn mantle_spot(terrain: &Terrain, volume: &Volume, p: FxVec2, tile: (i32, i32), 
 
 /// The move `side` meters along the face from `p`, feet at `feet`: on along
 /// it, round an outside corner onto the tile's other face, or at an inside
-/// corner onto the rock ahead. The new position, tile and face, or nothing
-/// if the way is blocked.
-fn along(terrain: &Terrain, volume: &Volume, p: FxVec2, feet: Fx, climb: &Climb, radius: Fx, side: Fx) -> Option<(FxVec2, (i32, i32), Face)> {
+/// corner onto the rock ahead, if `turn` (the stick more along the face
+/// than up or down it: pushed diagonally into an inside corner, each
+/// face's sideways part points into the other, so it would turn back and
+/// forth every tick; it climbs the corner instead). The new position,
+/// tile and face, or nothing if the way is blocked.
+#[allow(clippy::too_many_arguments)]
+fn along(terrain: &Terrain, volume: &Volume, p: FxVec2, feet: Fx, climb: &Climb, radius: Fx, side: Fx, turn: bool) -> Option<(FxVec2, (i32, i32), Face)> {
     let (n, t) = (climb.face.normal(), climb.face.tangent());
     let way = t * side.signum();
     let q = p + t * side;
@@ -322,6 +326,9 @@ fn along(terrain: &Terrain, volume: &Volume, p: FxVec2, feet: Fx, climb: &Climb,
     // turns onto that rock's face, back to back with the old one.
     let ahead = Terrain::pit_tile(q + way * (radius + GAP));
     if ahead != Terrain::pit_tile(p) && !clear(volume, ahead, feet) {
+        if !turn {
+            return None;
+        }
         hold(volume, ahead, feet)?;
         let face = Face::of(-way);
         let turned = p + face.normal() * (plane(ahead, face) + radius + GAP - p.dot(face.normal()));
@@ -344,7 +351,7 @@ fn along(terrain: &Terrain, volume: &Volume, p: FxVec2, feet: Fx, climb: &Climb,
 /// stands on the floor under it; along by [`along`]. With nothing left to
 /// hold it falls. Returns whether it moved.
 #[allow(clippy::too_many_arguments)]
-fn shift(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, volume: &Volume, radius: Fx, def: &ClimbDef, up: Fx, side: Fx) -> bool {
+fn shift(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, volume: &Volume, radius: Fx, def: &ClimbDef, up: Fx, side: Fx, turn: bool) -> bool {
     let Some(mut climb) = avatar.climbing.climb else { return false };
     let feet = avatar.height;
     let mut moved = false;
@@ -374,7 +381,7 @@ fn shift(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain
         }
     }
     if side != Fx::ZERO {
-        if let Some((p, tile, face)) = along(terrain, volume, body.position, avatar.height, &climb, radius, side) {
+        if let Some((p, tile, face)) = along(terrain, volume, body.position, avatar.height, &climb, radius, side, turn) {
             body.position = p;
             climb.tile = tile;
             climb.face = face;
@@ -407,16 +414,17 @@ pub(super) fn step(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain
                 stand(body, avatar, to, top);
             } else {
                 // Up first, then over the edge: the feet reach the top at
-                // two thirds of the way.
+                // two thirds of the way, and only then does the body move
+                // over it, so it never cuts through the edge (CL.5's soak).
                 let t = Fx::from_ratio(done as i64, total as i64);
                 let rise = (t * Fx::from_ratio(3, 2)).min(Fx::ONE);
-                let over = ((t - Fx::from_ratio(1, 3)) * Fx::from_ratio(3, 2)).max(Fx::ZERO);
+                let over = ((t - Fx::from_ratio(2, 3)) * Fx::from_int(3)).max(Fx::ZERO);
                 avatar.height = Fx::lerp(low, top, rise);
                 body.position = FxVec2::lerp(from, to, over);
             }
         }
         ClimbPhase::Lunge { until, up, side, .. } => {
-            shift(body, avatar, tick, terrain, volume, radius, climb_def, up, side);
+            shift(body, avatar, tick, terrain, volume, radius, climb_def, up, side, true);
             if let Some(c) = avatar.climbing.climb.as_mut().filter(|c| matches!(c.phase, ClimbPhase::Lunge { .. }) && tick + 1 >= until) {
                 c.phase = ClimbPhase::Hold;
             }
@@ -424,7 +432,7 @@ pub(super) fn step(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain
         ClimbPhase::Hold => {
             let (into, sideways) = on_face(climb.face, stick(avatar));
             let up = if into > Fx::ZERO { into * climb_def.up } else { into * climb_def.down };
-            let moved = shift(body, avatar, tick, terrain, volume, radius, climb_def, up, sideways * climb_def.side);
+            let moved = shift(body, avatar, tick, terrain, volume, radius, climb_def, up, sideways * climb_def.side, sideways.abs() > into.abs());
             let c = &mut avatar.climbing;
             if c.climb.is_some_and(|c| c.phase == ClimbPhase::Hold) {
                 c.spent = (c.spent + if moved { climb_def.drain } else { climb_def.hang }).min(Fx::ONE);

@@ -1256,6 +1256,8 @@ mod climbing_tests;
 #[cfg(test)]
 mod fall_tests;
 #[cfg(test)]
+mod climbing_soak_tests;
+#[cfg(test)]
 mod combat_tests;
 #[cfg(test)]
 mod scene_tests;

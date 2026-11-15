@@ -51,10 +51,25 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 | `vehicle` | `(acceleration: ..., braking: ..., reverse: ..., turn: ..., wheelbase: ..., track: ..., climb: ..., lift: ..., gravity: ..., seat: ...)` | Required for `Vehicle`; forbidden otherwise. See [vehicles](vehicles.md). |
 | `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
 | `attack` | `(damage: integer, reach: number, windup: integer, cooldown: integer, knockback: number)` | Optional, `FollowRoute` only. How the character hits players in passing. |
+| `climb` | `(up: ..., down: ..., side: ..., wheel: ..., hang: ..., refill: ..., grab: ..., leap: ..., lunge: ..., lunge_time: ..., lunge_cost: ..., mantle: ..., fall: ..., land: ..., safe_fall: ..., fall_step: ...)` | Optional, `Player` only (the elder's). The character climbs walls and its falls hurt. See below. |
 
 `health.hp` is starting hit points. `health.breach_damage` is damage dealt on reaching the route's target. If supplied, `health.armor` must contain both `points` and `radius`; the armor absorbs hits and enlarges the collision radius until it breaks.
 
 `attack` makes a threat hit players it passes, only in scenarios where players have health (`player_health` above 0). It stops beside the nearest one in reach, winds up for `windup` frames, then swings. A stagger or shock during the windup cancels the swing. The swing hits if the player is still within `reach` meters, measured center to center. A hit takes `damage` health and pushes the player away at `knockback` meters per second. The next swing can start `cooldown` frames after the hit. All five fields are required, after inheritance. A variant merges them field by field, like `health`. A character without `attack` never attacks.
+
+`climb` lets a player climb any face of a volume's rock 1 m or taller
+(the Climbing Gym, `kestrel/CLIMBING.md`). Speeds are meters per second
+on the face: `up`, and `down` and `side`. The stamina wheel lasts `wheel`
+seconds moving and `hang` seconds hanging still, and refills in `refill`
+seconds on any floor. `grab` is the frames of pushing into a face before
+grabbing it. Jump at a face's foot grabs `leap` meters up it; on a face it
+lunges `lunge` meters in `lunge_time` frames for `lunge_cost` of the
+wheel. `mantle` is the frames pulling over the top. Off a face or a ledge
+the character falls at `fall` m/s² and lands in `land` frames, and a fall
+from `safe_fall` meters takes 1 health, plus 1 for every `fall_step`
+meters more, where players have health. The elder's: 1, 1.5, 1.5 m/s; 15 s,
+90 s, 2 s; 9 frames; 1.5 m; 2 m in 20 frames for 0.2; 30 frames; 20 m/s²,
+8 frames; 5 m and 2.5 m (17.5 m takes its 6).
 
 `avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations, including `carry.transfer`, are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
 

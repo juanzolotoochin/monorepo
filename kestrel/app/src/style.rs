@@ -222,7 +222,10 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
     world.resource_mut::<ClearColor>().0 = color(profile.background);
     let mut ambient = world.resource_mut::<GlobalAmbientLight>();
     ambient.color = color(profile.ambient);
-    ambient.brightness = profile.ambient_brightness;
+    // A scene's own ambient over the style's: the Climbing Gym's, so its
+    // faces in shade (east and north, with the sun from the south-west)
+    // read instead of drawing near black (CL.5).
+    ambient.brightness = scene.scene.ambient.unwrap_or(profile.ambient_brightness);
     for mut light in world.query::<&mut DirectionalLight>().iter_mut(world) {
         light.color = color(profile.sunlight);
         light.illuminance = profile.illuminance;

@@ -1,7 +1,11 @@
 # Kestrel climbing gym (design)
 
-Status: agreed (2026-11-11), an exploration. Tasks CL.1–CL.6 in
-[`todo/climbing.md`](todo/climbing.md). It builds on the volume
+Status: done (2026-11-15), an exploration reviewed by video (CL.5); the
+open-world study (CL.6) is still to write. Agreed 2026-11-11. Tasks
+CL.1–CL.6 in [`todo/climbing.md`](todo/climbing.md); what changed from
+the decisions below is under [What changed versus the
+design](#what-changed-versus-the-design), and what to judge in play is
+"Climb the gym" in [`todo/playtest-review.md`](todo/playtest-review.md). It builds on the volume
 ([`VERTICALITY.md`](VERTICALITY.md)); the rules for the work in
 [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) apply here too (one
 subagent per task, tests per task, a `docs/test-time.md` row at the end).
@@ -147,7 +151,8 @@ the scene list: F4 steps to it, or `--scene climbing-gym`), 128 m across
 (extent 64). The scene file's comments name each feature in tiles (x
 east, z south) and layers. The sun shines from the south-west, so the faces
 that matter most face south or west, in the light; east and north faces
-stand in shadow, near black:
+stand in shadow (near black until CL.5 gave the gym its own `ambient`,
+800, the town's at noon):
 
 | Feature | Where (tiles) | Height |
 | --- | --- | --- |
@@ -168,6 +173,78 @@ mountain never comes in front of it; its `TurningView` feature turns the
 view with Z and C (the D-pad's left and right) as in a town. Demo:
 `//kestrel/app:climbing_gym_demo` (and `_video`), walking round the
 mountain while the view turns and zooms.
+
+## The review (CL.5)
+
+The exploration was reviewed by video, two clips of at most 120 s (a
+script's cap), rendered locally (`bazel build` of the `_video` targets):
+
+- `//kestrel/app:climbing_face_demo` (71 s): the 40 m west face in three
+  pitches with a rest on each ledge, the silhouette from the far side on
+  the second, a lunge on the third, the summit.
+- `//kestrel/app:climbing_tour_demo` (85 s): the 5 m pillar round its
+  corner and a step off it (1 health), the chimney's three walls and out
+  of its mouth, the inside corner, a wheel run out with lunges and the
+  fall from 11 m (3 health), the overhang from below and on to the wing.
+
+`//kestrel/app:climbing_view_demo` (CL.4) is the shorter look at the pose
+and wheel. The soak (`climbing_soak_tests`) climbs at random round the
+mountain and pillars, checking every tick that the climber hangs off a
+face it holds, clear of rock, that the wheel stays in range and is never
+grabbed exhausted, and that deaths come back.
+
+## What changed versus the design
+
+Gathered from the tasks' Done paragraphs in
+[`todo/climbing.md`](todo/climbing.md):
+
+- **G lets go, not "G or B"** (K3, CL.2): G is Board, which has nothing to
+  board on a wall (a gamepad's left-stick click). The pad's B stays Drop,
+  so climbing needed no new command. Only the stick grabs (0.15 s pushing
+  within 60 degrees of straight in), never a click-to-move route; on a
+  face the stick reads against the face (into it up, out of it down,
+  along it sideways).
+- **The exhaustion rule** (K6, CL.2): an empty wheel lets go, and the
+  elder can't grab again until the wheel is full on a floor; after any
+  let-go, not until they stand on a floor. So nothing catches a fall
+  part way, and nothing bridges a chimney's two walls (CL.5).
+- **Ledge falls are real** (CL.2): a climber with no jump of its own (the
+  elder) falls under the climb's 20 m/s² off a face and off any ledge in a
+  volume, where it used to drop to the floor at once.
+- **17.5 m kills** (K7, CL.3): 5 m takes 1, each 2.5 m more another, so
+  17.5 m takes the elder's 6; "about 20 m" in the design. A full wheel
+  climbs about 15 m (5 health), so running out from the ground straight
+  up is survivable, just.
+- **The gym's `player_health`** (CL.3): a new scene field (1–100, not
+  beside a scenario) gives the scenario-less gym's elder 6 health, so its
+  falls hurt; the Tunnel Lab, without it, stays unhurt.
+- **The high-roof sight rule** (CL.1): a roof 5 m or more over the floor
+  counts as sky for the view (`sight::lit`), so standing under the 7 m
+  overhang doesn't darken the screen as a tunnel does. The fog still
+  counts it as roofed.
+- **`zoom_out`** (K9, CL.1): a scene field (the gym's 80 m; 26 elsewhere),
+  with the camera standing four times further back there
+  (`effects::stand_back`) so a 40 m mountain never meets its near plane;
+  and `TurningView`, a scene feature for Z/C outside a town.
+- **The silhouette and the wheel** (K9, CL.4): flat cyan, drawn where rock
+  stands over 1.3 m nearer the camera than the body, volume scenes only;
+  the wheel is a ring right of the body in screen space, with a red "!"
+  in the air when a fall will hurt. A hurting fall has its own thud (dust,
+  the landing sound, a shake by the damage), not a ghoul's hit.
+- **The pull-over** (CL.5): the feet reach the top before the body moves
+  over the edge (it used to start moving over a third of the way in and
+  cut through the edge's corner for a few ticks).
+- **Inside corners** (CL.5): the climber turns into an inside corner only
+  when the stick is more along the face than up or down it. Pushed
+  diagonally into a corner it climbs straight up it; before, each face's
+  sideways part pointed into the other, and it turned between the two
+  every tick.
+- **The gym's own light** (CL.5): a scene `ambient` field (the ambient
+  light's brightness in place of the style's), the gym's 800, so the east
+  and north faces read dark slate instead of black; and the HUD says
+  "FALLING" for a climber's fall (it said "JETPACK / SAFE LANDING").
+- **The numbers stood** (CL.5): the elder's `climb` section is as CL.2
+  and CL.3 set it; the soak and the video found nothing to tune.
 
 ## Consequences
 

@@ -209,6 +209,14 @@ mod tests {
             scene.zoom_out = Some(zoom);
             assert!(assemble(scene, vec![]).unwrap_err().contains("zoom_out"));
         }
+        // Its own ambient, so the faces in shade read (CL.5); a negative or
+        // blinding one is refused.
+        assert_eq!(decoded.scene.ambient, Some(800.0));
+        for ambient in [-1.0, 5000.0] {
+            let mut scene = scene.clone();
+            scene.ambient = Some(ambient);
+            assert!(assemble(scene, vec![]).unwrap_err().contains("ambient"));
+        }
     }
     #[test]
     fn a_malformed_volume_box_is_refused() {

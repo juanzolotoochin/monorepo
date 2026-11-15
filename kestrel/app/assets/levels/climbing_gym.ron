@@ -59,6 +59,10 @@ Scene(id: "climbing-gym", player: "elder", features: [Digging, SlopedGround, Tur
     // The elder's health, so falls hurt (5 m takes 1, each 2.5 m more
     // another; the elder's climb section) and about 20 m kills (CL.3).
     player_health: Some(6),
+    // The ambient light, the town's at noon over the style's 180: with the
+    // sun fixed from the south-west the east and north faces stand in
+    // shade, near black without it; a climber on them should read (CL.5).
+    ambient: Some(800.0),
     volume: Some((
         extent: 64,
         boxes: [

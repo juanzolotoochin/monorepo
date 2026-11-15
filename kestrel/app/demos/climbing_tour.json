@@ -1,0 +1,289 @@
+{
+  "version": 1,
+  "scene": "climbing-gym",
+  "fps": 30,
+  "width": 1280,
+  "height": 720,
+  "max_frames": 3600,
+  "steps": [
+    {
+      "op": "camera_zoom",
+      "height": 10
+    },
+    {
+      "op": "walk",
+      "position": [
+        24.5,
+        22.2
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 10
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        -1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "drive",
+      "direction": [
+        1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "drive",
+      "direction": [
+        -1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 120
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        -1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "camera_zoom",
+      "height": 14
+    },
+    {
+      "op": "walk",
+      "position": [
+        4.1,
+        6.0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 10
+    },
+    {
+      "op": "drive",
+      "direction": [
+        1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 70
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        -1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 75
+    },
+    {
+      "op": "drive",
+      "direction": [
+        -1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 35
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 120
+    },
+    {
+      "op": "wait",
+      "frames": 75
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "walk",
+      "position": [
+        -4.9,
+        4.0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 10
+    },
+    {
+      "op": "drive",
+      "direction": [
+        1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        -1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 150
+    },
+    {
+      "op": "jump"
+    },
+    {
+      "op": "wait",
+      "frames": 25
+    },
+    {
+      "op": "jump"
+    },
+    {
+      "op": "wait",
+      "frames": 25
+    },
+    {
+      "op": "jump"
+    },
+    {
+      "op": "wait",
+      "frames": 25
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "walk",
+      "position": [
+        22.9,
+        -7.5
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 10
+    },
+    {
+      "op": "drive",
+      "direction": [
+        -1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 170
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "drive",
+      "direction": [
+        -1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 160
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    }
+  ]
+}

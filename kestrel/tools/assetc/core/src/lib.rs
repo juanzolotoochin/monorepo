@@ -379,6 +379,11 @@ pub struct Scene {
     /// Gym's, so its falls hurt and can kill (CL.3 of the climbing design).
     #[serde(default)]
     pub player_health: Option<u32>,
+    /// The ambient light's brightness here, in place of the style's (the
+    /// Climbing Gym's, so its faces in shade read: CL.5 of the climbing
+    /// design).
+    #[serde(default)]
+    pub ambient: Option<f32>,
 }
 
 /// The farthest the camera zooms out in a scene without its own
@@ -765,6 +770,11 @@ impl ScenePack {
                 return Err(format!("a scene's zoom_out is {zoom} m, but must be from {ZOOM_OUT} to {MAX_ZOOM_OUT}"));
             }
         }
+        if let Some(ambient) = self.scene.ambient {
+            if !(0.0..=2000.0).contains(&ambient) {
+                return Err(format!("a scene's ambient is {ambient}, but must be from 0 to 2000"));
+            }
+        }
         // Test walkers (V.7) walk a volume's floors, a few of them.
         if !self.scene.walkers.is_empty() {
             let Some(volume) = &self.scene.volume else { return Err("a scene's walkers walk a volume; give it one".into()) };
@@ -954,6 +964,7 @@ mod tests {
                 glow: None,
                 zoom_out: None,
                 player_health: None,
+                ambient: None,
                 volume: None,
                 walkers: vec![],
                 instances: vec![Instance {
@@ -1014,6 +1025,7 @@ mod tests {
                 glow: None,
                 zoom_out: None,
                 player_health: None,
+                ambient: None,
                 volume: None,
                 walkers: vec![],
                 terrain: Some(Terrain {

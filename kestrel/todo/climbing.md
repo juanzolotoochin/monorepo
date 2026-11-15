@@ -4,44 +4,6 @@ The climbing gym's design is [`CLIMBING.md`](../CLIMBING.md) (decisions
 K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 `kestrel-climbing`.
 
-## CL.5 Soak, tuning and demo
-
-- **Status:** open
-- **Why:** the exploration is reviewed by video.
-- **What to do:** a soak in the gym (random climbing, `validate` every
-  tick); tune speeds, stamina and falls; a demo video climbing a pillar,
-  the 40 m face with two rests, a corner, an overhang, a lunge, running
-  out and falling; the full suite; a `docs/test-time.md` row; docs and
-  `CLIMBING.md`'s status; a "Climb the gym" section in
-  `todo/playtest-review.md`.
-- **Where:** sim tests, `app/demos/`, docs.
-- **Found in:** climbing design.
-- **Tests:** the soak; the full suite.
-- **Notes from CL.1:** `climbing_gym_demo` is a walk-round with
-  `camera_zoom` and `camera_rotate`; a script is capped at 120 s
-  (`max_frames <= fps * 120`). The renders took 100 to 195 s locally.
-- **Notes from CL.2:** numbers in `elder.ron`'s `climb`. Untested: the
-  chimney (two walls 2 m apart: inside-corner turns from its back wall),
-  climbing in the town (any 1 m wall pushed into for 0.15 s is grabbed;
-  in a 2 m tunnel there is no room to rise, so none), climbing with a
-  bundle or a pile haul. A demo script needs `jump` and `board` (G) to
-  lunge and let go.
-- **Notes from CL.3:** the demo's "running out and falling" now hurts
-  (about 15 m: 4 or 5 of 6) and a fall from 17.5 m or more kills, with a
-  2 s respawn at the spawn by the pillars; the soak should expect deaths
-  and respawns. Tuning: `safe_fall` and `fall_step` on the elder's
-  `climb`. The town's falls hurt only into dug shafts 5 m or deeper.
-- **Notes from CL.4:** `//kestrel/app:climbing_view_demo` already climbs
-  the west face (round the corner, over the 13.5 m ledge, a lunge, a fall
-  to the ledge) in 61 s: a start for the review video; it uses the new
-  `jump` op. Stick timings: the grab at 0.15 s, 1 m/s up, the mantle at
-  12.5 m on the 13.5 m pitch with about 17% of the wheel left. The pose and
-  wheel are tuned on the built-in exosuit rig; a styled rig with baked legs
-  (`ActorFootContacts`) is solved by the same IK but not looked at. Look at
-  the chimney (the silhouette should carry it) and the overhang in the
-  video. Step sounds play on sideways climbing (the gait clock counts the
-  body's flat move on a face).
-
 ## CL.6 An open-world study
 
 - **Status:** open
@@ -76,6 +38,40 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 - **Notes from CL.4:** nothing in the view scales with map size: the pose,
   wheel and silhouette read only the local avatar; the silhouette is one
   extra blended draw per elder mesh.
+- **Notes from CL.5:** the gym soak plays 10 minutes of climbing in about a
+  second and two hours in about 15 s: with one agent nothing in climbing
+  is costly, so far regions' climbers could run in the sim as they are.
+  The demo's headless runs (`--simulation`) render nothing and took a few
+  seconds for 2 minutes of play.
+
+## A route while climbing
+
+- **Status:** open
+- **Why:** found in CL.5: a click-to-move route (`Intent::GoTo`) given to a
+  climber on a face does nothing: only the stick moves a climber, so the
+  elder hangs there, draining the wheel slowly, until it runs out (90 s)
+  and lets go. In the review demo a `walk` op after a climb waited forever
+  (the script hit `max_frames`). In play a click on the ground while on a
+  wall seems ignored.
+- **What to do:** decide what a route does on a face: climb down to the
+  floor and then walk it, let go (and fall), or be refused with a notice
+  ("Let go first (G)"); make the demo `walk` op fail fast on a face.
+- **Where:** `sim/src/settlement/climb.rs` (`stick`, `step`),
+  `app/src/control/mod.rs` (`Command::Walk`).
+- **Found in:** CL.5.
+
+## The gym's controls line
+
+- **Status:** open
+- **Why:** found in CL.5's video: the controls line at the screen's foot
+  in the gym is the style's generic one ("SPACE JETPACK ... WASD STEER"),
+  but there Space jumps at a face and lunges on it, G lets go and Z/C turn
+  the view; nothing tells a player how to climb.
+- **What to do:** a controls line for a climber (WASD climb, SPACE lunge,
+  G let go, Z/C turn), as the town's ballista has its own
+  (`TOWN_BALLISTA_HELP`).
+- **Where:** `app/src/style.rs` (the help line), `app/src/scene.rs`.
+- **Found in:** CL.5.
 
 ## Climbing while carrying
 
@@ -100,9 +96,113 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
 - **Where:** `app/src/character.rs`, `app/src/climb_view.rs`.
 - **Found in:** CL.4.
 
-## The gym's black faces
+## Done
 
-- **Status:** open
+### CL.5 Soak, tuning and demo
+
+- **Status:** done (branch `kestrel-climbing`, PR to come)
+- **Why:** the exploration is reviewed by video.
+- **What to do:** a soak in the gym (random climbing, `validate` every
+  tick); tune speeds, stamina and falls; a demo video climbing a pillar,
+  the 40 m face with two rests, a corner, an overhang, a lunge, running
+  out and falling; the full suite; a `docs/test-time.md` row; docs and
+  `CLIMBING.md`'s status; a "Climb the gym" section in
+  `todo/playtest-review.md`.
+- **Where:** sim tests, `app/demos/`, docs.
+- **Found in:** climbing design.
+- **Tests:** the soak; the full suite.
+- **Notes from CL.1:** `climbing_gym_demo` is a walk-round with
+  `camera_zoom` and `camera_rotate`; a script is capped at 120 s
+  (`max_frames <= fps * 120`). The renders took 100 to 195 s locally.
+- **Notes from CL.2:** numbers in `elder.ron`'s `climb`. Untested: the
+  chimney (two walls 2 m apart: inside-corner turns from its back wall),
+  climbing in the town (any 1 m wall pushed into for 0.15 s is grabbed;
+  in a 2 m tunnel there is no room to rise, so none), climbing with a
+  bundle or a pile haul. A demo script needs `jump` and `board` (G) to
+  lunge and let go.
+- **Notes from CL.3:** the demo's "running out and falling" now hurts
+  (about 15 m: 4 or 5 of 6) and a fall from 17.5 m or more kills, with a
+  2 s respawn at the spawn by the pillars; the soak should expect deaths
+  and respawns. Tuning: `safe_fall` and `fall_step` on the elder's
+  `climb`. The town's falls hurt only into dug shafts 5 m or deeper.
+- **Notes from CL.4:** `//kestrel/app:climbing_view_demo` already climbs
+  the west face (round the corner, over the 13.5 m ledge, a lunge, a fall
+  to the ledge) in 61 s: a start for the review video; it uses the new
+  `jump` op. Stick timings: the grab at 0.15 s, 1 m/s up, the mantle at
+  12.5 m on the 13.5 m pitch with about 17% of the wheel left. The pose and
+  wheel are tuned on the built-in exosuit rig; a styled rig with baked legs
+  (`ActorFootContacts`) is solved by the same IK but not looked at. Look at
+  the chimney (the silhouette should carry it) and the overhang in the
+  video. Step sounds play on sideways climbing (the gait clock counts the
+  body's flat move on a face).
+- **Done:** the soak: `climbing_soak_tests` (sim). `gym_soak` plays the
+  gym from a seed: on the ground it walks a route to one of 18 spots 0.4 m
+  off a face (the pillars, the west face's pitches, the north face, the
+  shoulder, the inside corner, the chimney's three walls, the wing beside
+  and under the overhang, the low step) and pushes into it or jumps at
+  it, pushes or jumps a random way, stops, or presses G; on a face it
+  mostly climbs up (2–10 s at a time), else sideways, diagonally, down,
+  hangs, lunges (11%) or lets go (5%); falling, it reaches for a face now
+  and then. Every tick it validates the settlement and checks: on a face
+  the body is clear of rock, holds rock at its tile, hangs exactly
+  radius + `GAP` off the face's plane, in the tile in front of it, and no
+  climb lasts over 92 s; the wheel stays in [0, 1] and never refills on a
+  face; a grab is never made exhausted, nor in the air after a let-go;
+  off a face the body stands free (`soak_tests::standing_free`) or falls
+  clear of rock; it stays on the map, its feet from -16 to 64 m; a death
+  (a `Fell` that killed) comes back at home, whole, within 3 s. The CI
+  test plays 10 minutes in about a second (the gym has one agent and no
+  threats) and checks the first minute hashes alike twice; the `#[ignore]`d
+  sibling plays four seeds for 30 minutes each (about 15 s), run once.
+  Counts, 10 min: 22 grabs, 4 leaps, 4 pull-overs, 8 lunges, 2 G let-gos,
+  18 empty wheels, 5 corner wraps, 2 inside turns, 22 falls that hurt,
+  10 deaths, highest 15 m. Over the four half hours: 310 grabs, 56 leaps,
+  102 pull-overs, 124 lunges, 47 G let-gos, 164 empty wheels, 70 wraps,
+  25 turns, 212 falls that hurt, 82 deaths, up to the summit (40 m). Two
+  bugs, fixed: the pull-over moved the body over the edge from a third of
+  the way, before the feet were up, so for a few ticks it cut through the
+  edge's corner (now the feet reach the top at two thirds and only then
+  does it move over); and pushed diagonally into an inside corner the
+  climber turned between the two faces every tick (each face's sideways
+  part points into the other), its heading swapping 90 degrees a tick
+  (now it turns only when the stick is more along the face than up or
+  down it, so a diagonal climbs straight up the corner). The untested
+  cases, in `climbing_tests`: `round_the_chimney_s_three_walls_and_out`
+  (up the east wall, into the back wall, across onto the west wall, out
+  of the mouth round onto the shoulder's face, and a let-go with the
+  stick at the other wall grabs nothing until the floor: bridging is not
+  special, the exhaustion and let-go rules already say no),
+  `the_overhang_from_below` (nothing to grab under the roof; up the
+  wing's face the climb stops at the roof, a lunge there stays under it,
+  out from under it the elder climbs on to the wing's top, walks out over
+  the roof and off its edge, 10 m for 3), `climbing_out_of_a_pit` (a pit
+  3 m deep, as dug, climbed out of). Tuning: the elder's `climb` numbers
+  are unchanged; nothing in the traces or the video looked off (13 s
+  pitches, 2.5 s rests on the ledges, the run-out at about 11 m with
+  lunges). The view: the HUD said "JETPACK / SAFE LANDING" for a climber's
+  fall (it took any airborne body without a jump for a jetpack's
+  descent); it now says "FALLING". The gym's black faces: a scene
+  `ambient` field (assetc, 0–2000) in place of the style's, the gym's 800
+  (the town's at noon; the style's is 180), so the faces in shade read
+  dark slate instead of black (see "The gym's black faces" below). The
+  demo, two clips of at most 120 s, 1280 x 720:
+  `//kestrel/app:climbing_face_demo` (and `_video`, 71 s: the 40 m west
+  face in three pitches with a rest on each ledge, the silhouette from the
+  far side on the second pitch, a lunge on the third, the summit and the
+  view turning round it) and `//kestrel/app:climbing_tour_demo` (85 s: the
+  5 m pillar round its corner and a step off it, 1 health; the chimney's
+  three walls and out of its mouth; the inside corner; a wheel run out
+  with lunges at 11 m and the fall, 3 health; up the wing's face under the
+  overhang, out from under the roof and onto the wing). Their waits were
+  set against headless runs of the scripts (`demo --simulation
+  --demo-script ... --trace ...`): the traced feet show each mantle to the
+  frame. Found: a click-to-move route on a face does nothing (see "A route
+  while climbing"). The docs: `CLIMBING.md` done, with "What changed
+  versus the design"; "Climb the gym" in `todo/playtest-review.md`.
+
+### The gym's black faces
+
+- **Status:** done in CL.5 (branch `kestrel-climbing`)
 - **Why:** found in CL.4: with the sun fixed from the south-west, the
   summit's east face (and the north faces) draw near black. The silhouette
   only shows a climber hidden behind rock, so one climbing in plain sight
@@ -113,8 +213,12 @@ K1–K12). Its tasks CL.1–CL.6 run in order, one agent each, on branch
   check against the video in CL.5.
 - **Where:** `app/src/scene.rs` (lights), `app/src/volume_mesh.rs`.
 - **Found in:** CL.4.
-
-## Done
+- **Done:** in CL.5: a scene `ambient` (the ambient light's brightness in
+  place of the style's), the gym's 800, the town's at noon (the style's
+  is 180). The east and north faces now read dark slate, a climber on
+  them by the body as well as its ivory blocks. Height banding past 8 m
+  is not done: in the video the climber's height reads from the ledges,
+  the wheel and the zoom.
 
 ### CL.4 Climbing in the view
 

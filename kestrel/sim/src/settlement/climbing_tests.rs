@@ -507,3 +507,110 @@ fn a_replayed_avatar_climbs_as_the_simulation_does() {
     assert!(lunged && wrapped, "the replay covered a lunge and a corner");
     assert!(!on_face(&sim), "and letting go");
 }
+
+// The cases CL.5 looked at: the chimney, the overhang from below, a pit.
+
+/// Whether the elder's body is clear of rock, as the climb keeps it.
+fn clear_of_rock(sim: &Simulation) -> bool {
+    let a = me(sim);
+    let volume = sim.world().terrain().volume.as_ref().unwrap();
+    super::climb::body_clear(volume, a.body.position, a.avatar().unwrap().height, a.radius())
+}
+
+/// Steps until `done` or `seconds` pass, the body clear of rock every
+/// tick; whether it was done.
+fn until_clear(sim: &mut Simulation, seconds: f64, done: impl Fn(&Simulation) -> bool) -> bool {
+    for _ in 0..ticks(seconds) {
+        assert!(clear_of_rock(sim), "in rock: {:?}, feet {}, {:?}", offset(sim), feet(sim).to_f64(), climbing(sim).climb);
+        if done(sim) {
+            return true;
+        }
+        sim.step(&[]);
+    }
+    done(sim)
+}
+
+/// Round the chimney's walls (a slot 2 m wide, x 3..4, z 3..8, in the
+/// shoulder): up its east wall, north into the back wall (an inside
+/// corner), west across the back onto the west wall (another), south along
+/// it out of the mouth round the outside corner onto the shoulder's south
+/// face. Nothing special bridges the two walls: on a wall the stick out of
+/// it climbs down, and a let-go grabs nothing until a floor.
+#[test]
+fn round_the_chimney_s_three_walls_and_out() {
+    let mut sim = gym();
+    place(&mut sim, 4.1, 6.0, 0.0, 1, 0);
+    stick(&mut sim, 1.0, 0.0);
+    assert!(until(&mut sim, 1.0, on_face));
+    assert_eq!(face(&sim), Some(((5, 6), Face::West)), "the east wall");
+    run(&mut sim, 2.0);
+    let legs: [((f64, f64), ((i32, i32), Face)); 3] = [((0.0, -1.0), ((4, 2), Face::South)), ((-1.0, 0.0), ((2, 3), Face::East)), ((0.0, 1.0), ((2, 8), Face::South))];
+    for ((x, z), want) in legs {
+        stick(&mut sim, x, z);
+        assert!(until_clear(&mut sim, 6.0, |s| face(s) == Some(want)), "toward {want:?}: at {:?} on {:?}", offset(&sim), face(&sim));
+        assert_eq!(face(&sim), Some(want), "at {:?}", offset(&sim));
+    }
+    assert!(feet(&sim) > Fx::ONE, "still up: {}", feet(&sim).to_f64());
+    // Out of the wall climbs down, it doesn't cross: let go, and the
+    // stick at the other wall grabs nothing on the way down.
+    let mut sim = gym();
+    place(&mut sim, 4.1, 6.0, 0.0, 1, 0);
+    stick(&mut sim, 1.0, 0.0);
+    assert!(until(&mut sim, 1.0, on_face));
+    run(&mut sim, 3.0);
+    stick(&mut sim, -1.0, 0.0);
+    let_go(&mut sim);
+    assert!(until_clear(&mut sim, 3.0, standing), "fell");
+    assert_eq!(feet(&sim), Fx::ZERO);
+    assert!(until(&mut sim, 2.0, on_face), "grabs the west wall once down: {:?}", offset(&sim));
+    assert_eq!(face(&sim), Some(((2, 6), Face::East)));
+}
+
+/// The overhang from below (a roof from 7 m to 10 m, 4 m out from the
+/// wing's east face, z -14..-6): from the ground under it nothing grabs it;
+/// up the wing's face under it the climb stops at the roof, a lunge up
+/// there stays under it, and along the face out from under it the elder
+/// climbs on to the wing's top, walks out over the roof and off its edge:
+/// 10 m, 3 health.
+#[test]
+fn the_overhang_from_below() {
+    let mut sim = gym();
+    place(&mut sim, 24.5, -10.0, 0.0, 0, -1);
+    jump(&mut sim);
+    run(&mut sim, 0.5);
+    assert!(!on_face(&sim), "nothing to grab under the roof");
+    place(&mut sim, 22.86, -7.0, 0.0, -1, 0);
+    stick(&mut sim, -1.0, 0.0);
+    assert!(until(&mut sim, 1.0, on_face));
+    assert!(!until_clear(&mut sim, 6.0, |s| feet(s) > Fx::from_int(5)), "stopped under the roof");
+    jump(&mut sim);
+    assert!(!until_clear(&mut sim, 1.0, |s| feet(s) > Fx::from_int(5)), "a lunge up stays under it");
+    assert!(on_face(&sim));
+    set_spent(&mut sim, Fx::ZERO);
+    stick(&mut sim, 0.0, 1.0);
+    // The roof ends at z -5.5; the body (0.32 m round) clears it past -5.18.
+    assert!(until_clear(&mut sim, 3.0, |s| offset(s).y > Fx::from_ratio(-51, 10)), "out from under the roof: {:?}", offset(&sim));
+    stick(&mut sim, -1.0, 0.0);
+    assert!(until_clear(&mut sim, 8.0, |s| standing(s) && feet(s) > Fx::from_int(9)), "on the wing's top");
+    assert_eq!(feet(&sim), Fx::from_int(10));
+    // Over the roof and off its east edge.
+    place(&mut sim, 24.5, -10.0, 10.0, 1, 0);
+    sim.step(&[]);
+    assert_eq!(feet(&sim), Fx::from_int(10), "on the roof");
+    stick(&mut sim, 1.0, 0.0);
+    assert!(until_clear(&mut sim, 5.0, |s| standing(s) && feet(s) == Fx::ZERO), "off the edge");
+    assert_eq!(me(&sim).body.health, 3, "a 10 m fall");
+}
+
+/// A pit 3 m deep (dug, as in the town): pushing into its wall grabs it,
+/// and the elder climbs out and stands on the ground.
+#[test]
+fn climbing_out_of_a_pit() {
+    let mut sim = small("elder", &[(false, (-1, -1), (1, 1), -6, 0)], Fx::from_int(-3));
+    assert_eq!(feet(&sim), Fx::from_int(-3), "in the pit");
+    stick(&mut sim, 1.0, 0.0);
+    assert!(until(&mut sim, 1.0, on_face), "grabbed the pit's wall");
+    assert_eq!(face(&sim).unwrap().1, Face::West);
+    assert!(until_clear(&mut sim, 5.0, |s| standing(s) && feet(s) == Fx::ZERO), "out of the pit: {:?}, {}", offset(&sim), feet(&sim).to_f64());
+    assert!(offset(&sim).x > Fx::from_ratio(3, 2), "on the ground beside it: {:?}", offset(&sim));
+}
