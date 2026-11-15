@@ -269,8 +269,9 @@ pub struct Burst {
 /// A ballista building's shooting (`BuildingKind::defence`), as a
 /// `Defender`'s: the nearest enemy in range, one unit of ammo a shot. Its
 /// ammo store takes `ammo` only, up to `ammo_cap`, and is only delivered
-/// to.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// to. A crawler's gun has one too (`character::GunDef`, the crawler
+/// turret's T7).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defence {
     /// The item it shoots, by id.
@@ -291,6 +292,32 @@ pub struct Defence {
     pub fireball: Option<Fireball>,
 }
 
+impl Defence {
+    /// Whether its numbers are in range: everything but whether its ammo is
+    /// an item, which a scenario checks for its building kinds. A crawler's
+    /// gun (a character's) can't know the scenario's items.
+    pub fn valid(&self) -> bool {
+        let f = Fx::from_ratio;
+        (1..=4096).contains(&self.ammo_cap)
+            && within(self.range, f(1, 10), Fx::from_int(32))
+            && within(self.period, f(1, 10), Fx::from_int(3600))
+            && (1..=1000).contains(&self.damage)
+            && within(self.projectile_speed, Fx::HALF, Fx::from_int(100))
+            && within(self.muzzle_height, Fx::ZERO, Fx::from_int(5))
+            && self.fireball.as_ref().is_none_or(|b| {
+                within(b.cooldown, f(1, 10), Fx::from_int(3600))
+                    && within(b.speed, Fx::HALF, Fx::from_int(100))
+                    && (0..=1000).contains(&b.damage)
+                    && within(b.radius, Fx::ZERO, Fx::from_int(8))
+                    && within(b.fire_radius, f(1, 10), Fx::from_int(8))
+                    && within(b.fire_seconds, f(1, 10), Fx::from_int(600))
+                    && (1..=1000).contains(&b.burn_damage)
+                    && within(b.burn_period, f(1, 10), Fx::from_int(60))
+                    && within(b.burn_linger, Fx::ZERO, Fx::from_int(600))
+            })
+    }
+}
+
 /// A possessed ballista's fireball (B4): it flies to the reticle at
 /// `speed` meters a second, hurts every enemy within `radius` of where it
 /// lands by `damage`, and sets the ground there alight: a fire of radius
@@ -298,7 +325,7 @@ pub struct Defence {
 /// `burn_damage` every `burn_period` seconds until `burn_linger` seconds
 /// after it leaves. The elder waits `cooldown` seconds before the next. It
 /// costs no ammo.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fireball {
     pub cooldown: Fx,
@@ -737,23 +764,7 @@ impl Scenario {
                         && k.burst.units == 0
                         && k.burst.cooldown == Fx::ZERO
                         && items.contains(d.ammo.as_str())
-                        && (1..=4096).contains(&d.ammo_cap)
-                        && within(d.range, f(1, 10), Fx::from_int(32))
-                        && within(d.period, f(1, 10), Fx::from_int(3600))
-                        && (1..=1000).contains(&d.damage)
-                        && within(d.projectile_speed, Fx::HALF, Fx::from_int(100))
-                        && within(d.muzzle_height, Fx::ZERO, Fx::from_int(5))
-                        && d.fireball.as_ref().is_none_or(|b| {
-                            within(b.cooldown, f(1, 10), Fx::from_int(3600))
-                                && within(b.speed, Fx::HALF, Fx::from_int(100))
-                                && (0..=1000).contains(&b.damage)
-                                && within(b.radius, Fx::ZERO, Fx::from_int(8))
-                                && within(b.fire_radius, f(1, 10), Fx::from_int(8))
-                                && within(b.fire_seconds, f(1, 10), Fx::from_int(600))
-                                && (1..=1000).contains(&b.burn_damage)
-                                && within(b.burn_period, f(1, 10), Fx::from_int(60))
-                                && within(b.burn_linger, Fx::ZERO, Fx::from_int(600))
-                        })
+                        && d.valid()
                 }
                 _ => false,
             };

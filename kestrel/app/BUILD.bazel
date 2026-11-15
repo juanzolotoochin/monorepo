@@ -270,6 +270,50 @@ filegroup(
     output_group = "video",
 )
 
+# The crawler's gun in the view (TU.5 of the crawler turret): an elder at
+# the gun aims, fires and throws the fireball, then a sprite crews it.
+game_demo(
+    name = "crawler_turret_demo",
+    game = ":demo",
+    script = "demos/crawler_turret.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "crawler_turret_demo_video",
+    srcs = [":crawler_turret_demo"],
+    output_group = "video",
+)
+
+# TU.6 of the crawler turret (T10): a guest pilots the crawler to two waves
+# while the elder at its gun shoots them, bolts and fireball...
+game_demo(
+    name = "crawler_gunner_demo",
+    game = ":demo",
+    script = "demos/crawler_gunner.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "crawler_gunner_demo_video",
+    srcs = [":crawler_gunner_demo"],
+    output_group = "video",
+)
+
+# ...and the elder pilots while a sprite on the crew job mans the gun.
+game_demo(
+    name = "crawler_sprite_gunner_demo",
+    game = ":demo",
+    script = "demos/crawler_sprite_gunner.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "crawler_sprite_gunner_demo_video",
+    srcs = [":crawler_sprite_gunner_demo"],
+    output_group = "video",
+)
+
 game_demo(
     name = "surprise_demo",
     game = ":demo",

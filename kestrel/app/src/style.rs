@@ -119,6 +119,13 @@ pub const TOWN_POSSESSED_HELP: &str = "E OR G LEAVE / R BURST / Z/C ROTATE";
 /// firing at the reticle under the mouse, the fireball, and leaving.
 pub const TOWN_BALLISTA_HELP: &str = "MOUSE AIM / LMB FIRE / R FIREBALL / E OR G LEAVE / Z/C ROTATE";
 
+/// The Crawler Lab's help lines (TU.5 of the crawler turret,
+/// `settlement::lab_help`): on foot, piloting, at the gun and riding.
+pub const LAB_HELP: &str = "WASD MOVE / SHIFT RUN / G BOARD / E LOAD OR TAKE / Q DROP / J CREW JOB / Z/C ROTATE";
+pub const LAB_PILOT_HELP: &str = "WASD WALK / SHIFT TROT / G CLIMB DOWN / Z/C ROTATE";
+pub const LAB_GUNNER_HELP: &str = "MOUSE AIM / LMB FIRE / R FIREBALL / G CLIMB DOWN / Z/C ROTATE";
+pub const LAB_RIDER_HELP: &str = "G CLIMB DOWN / Z/C ROTATE";
+
 /// Dresses a world in its scene's style: materials, lights, fog, the
 /// environment and the player's styled parts. Runs when the world starts
 /// (see `SceneView`), after the player's body exists. Character Studio

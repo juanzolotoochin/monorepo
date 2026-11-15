@@ -39,7 +39,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::vehicle::{self, VehicleState, REVERSE_ANGLE, SUBSTEP};
-use super::{AgentIx, AgentState, Event, Impact, Role, Settlement};
+use super::{AgentIx, AgentState, Event, Impact, Role, Seat, Settlement};
 use crate::messages::{FootLands, Messages};
 use crate::nav::{angle_between, bearing, heading_vector};
 use crate::terrain::{Disc, Terrain};
@@ -186,7 +186,7 @@ pub struct Standing {
 pub fn standing(agents: &[AgentState]) -> Vec<Standing> {
     agents
         .iter()
-        .filter(|a| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.inside()))
+        .filter(|a| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.sheltered()))
         .map(|a| Standing { position: a.body.position, radius: a.radius(), height: a.height() })
         .collect()
 }
@@ -568,20 +568,37 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     landed
 }
 
-// Riders (CR.4, C9): the pilot stands at the helm on the deck's middle (the
-// vehicle's one seat), and up to three riders sit on the cargo deck behind
-// it, at `RIDERS`. Boarding reaches the body's box, not a radius, and
-// climbing down puts an elder beside the box on a floor level with the
-// highest its feet stand on.
+// Riders (CR.4, C9) and the gunner (TU.1 of the turret, T2): the pilot
+// stands at the helm on the deck's middle (the vehicle's one seat), up to
+// two riders sit on the cargo deck behind it, at `RIDERS`, and a crawler
+// with a gun has a gunner's place behind the crates, at `GUNNER`. Boarding
+// reaches the body's box, not a radius, and climbing down puts an elder
+// beside the box on a floor level with the highest its feet stand on.
 
-/// Where the riders sit, from the deck's middle (the pilot's place): two
-/// in front of the crates, left and right, and one behind them. The rig
-/// (`app/actors/crawler.ron`) keeps these spots clear.
-pub const RIDERS: [Offset; 3] = [
+/// Where the riders sit, from the deck's middle (the pilot's place): in
+/// front of the crates, left and right. The rig (`app/actors/crawler.ron`)
+/// keeps these spots clear.
+pub const RIDERS: [Offset; 2] = [
     Offset { along: Fx::from_ratio(-3, 4), across: Fx::from_ratio(-7, 10) },
     Offset { along: Fx::from_ratio(-3, 4), across: Fx::from_ratio(7, 10) },
-    Offset { along: Fx::from_ratio(-12, 5), across: Fx::ZERO },
 ];
+
+/// Where the gunner stands, from the deck's middle: behind the crates, on
+/// the middle (the third rider's place before the turret). The gun itself
+/// is on the cab's roof (`GunDef::mount`), so the gunner stands apart
+/// from it.
+pub const GUNNER: Offset = Offset { along: Fx::from_ratio(-12, 5), across: Fx::ZERO };
+
+/// Where `seat` stands on a crawler's deck, from its middle: a rider's
+/// place or the gunner's. `None` for the pilot, at the middle, and for a
+/// building's slot.
+pub fn deck_spot(seat: Seat) -> Option<Offset> {
+    match seat {
+        Seat::Rider { place, .. } => Some(RIDERS[place as usize]),
+        Seat::Gunner { .. } => Some(GUNNER),
+        Seat::Vehicle(_) | Seat::Building(_) => None,
+    }
+}
 
 /// How far past the body's box an elder climbing down stands, beyond its
 /// own radius, in meters.
@@ -620,10 +637,28 @@ pub fn box_distance_squared(pose: Pose, c: &CrawlerDef, p: FxVec2) -> Fx {
     along * along + across * across
 }
 
-/// Where an elder of `radius` climbing down from `place` (`None`: the
-/// pilot's, else a rider's) stands: its seat's own spot first (the
-/// pilot's beside the box's middle on the left, a front rider's beside
-/// the back on their side, the back rider's behind the box), then beside
+/// The point of the body's box (seen from above) nearest `p`: `p` itself
+/// inside it.
+pub fn box_nearest(pose: Pose, c: &CrawlerDef, p: FxVec2) -> FxVec2 {
+    let o = pose.local(p);
+    let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
+    pose.at(Offset { along: o.along.clamp(-half_length, half_length), across: o.across.clamp(-half_width, half_width) })
+}
+
+/// Whether a crawler is walking (T6 of the turret): a foot swinging, the
+/// body moving, or its pilot's stick held (turning in place moves the body
+/// with no speed). A walking crawler takes no deliveries. A rover, or a
+/// crawler with no legs, never stands still for one.
+pub fn walking(v: &VehicleState) -> bool {
+    let Some(legs) = v.legs.as_ref() else { return true };
+    v.speed != Fx::ZERO || v.fall != Fx::ZERO || v.control.direction != FxVec2::ZERO || legs.up().next().is_some()
+}
+
+/// Where an elder of `radius` climbing down from `spot` (`None`: the
+/// pilot's, else a rider's or the gunner's, `deck_spot`) stands: its
+/// seat's own spot first (the pilot's beside the box's middle on the
+/// left, a rider's beside the back on their side, the gunner's behind
+/// the box), then beside
 /// the box on the seat's side (the left for the middle seats), level with
 /// its middle, toward the back and the front; then the other side; then
 /// behind the box and in front of it. The spot
@@ -632,14 +667,44 @@ pub fn box_distance_squared(pose: Pose, c: &CrawlerDef, p: FxVec2) -> Fx {
 /// a pit or a trench, even with a foot down in it), and clear of every
 /// foot's spot and the spot each swinging foot lands on. `None` when
 /// every spot is blocked.
-pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, place: Option<u8>, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
-    let legs = v.legs.as_ref()?;
+pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, spot: Option<Offset>, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+    let side = Fx::from_int(if spot.is_some_and(|o| o.across > Fx::ZERO) { 1 } else { -1 });
+    let offsets = exit_offsets(c, side, radius);
+    // Each seat tries its own spot first, so four climbing down together
+    // land apart: the pilot's beside the middle, the riders' beside the
+    // back, the gunner's behind.
+    let first = match spot {
+        None => 0,
+        Some(o) if o.across == Fx::ZERO => 6,
+        Some(_) => 1,
+    };
+    let offsets = std::iter::once(offsets[first]).chain(offsets.into_iter().enumerate().filter(|&(i, _)| i != first).map(|(_, o)| o));
+    let clear = exit_check(v, radius, terrain)?;
     let pose = Pose::of(v);
-    let side = Fx::from_int(if place.is_some_and(|p| RIDERS[p as usize].across > Fx::ZERO) { 1 } else { -1 });
+    offsets.into_iter().find_map(|o: Offset| clear(pose.at(o)))
+}
+
+/// Where a body of `radius` at `from` walks to climb aboard (a crew
+/// sprite, TU.4 of the turret): of the spots an elder climbs down to
+/// (`exit_spot`'s eight, by the same rules), the free one nearest `from`,
+/// the first in `exit_spot`'s order for the left side on a tie. Every one
+/// is within the boarding reach of the box. `None` when every spot is
+/// blocked.
+pub fn board_spot(v: &VehicleState, c: &CrawlerDef, from: FxVec2, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+    let clear = exit_check(v, radius, terrain)?;
+    let pose = Pose::of(v);
+    exit_offsets(c, Fx::from_int(-1), radius).into_iter().filter_map(|o| clear(pose.at(o))).min_by_key(|&(p, _)| (p - from).length_squared())
+}
+
+/// The eight spots beside a crawler's box a body of `radius` climbs down
+/// to, `side` (1 the right, -1 the left) first: beside the middle, toward
+/// the back and the front; the same on the other side; behind and in
+/// front.
+fn exit_offsets(c: &CrawlerDef, side: Fx, radius: Fx) -> [Offset; 8] {
     let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
     let (beside, end) = (half_width + radius + EXIT_GAP, half_length + radius + EXIT_GAP);
     let along = Fx::from_ratio(3, 2);
-    let offsets = [
+    [
         Offset { along: Fx::ZERO, across: side * beside },
         Offset { along: -along, across: side * beside },
         Offset { along, across: side * beside },
@@ -648,23 +713,22 @@ pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, place: Option<u8>, radius: Fx
         Offset { along, across: -side * beside },
         Offset { along: -end, across: Fx::ZERO },
         Offset { along: end, across: Fx::ZERO },
-    ];
+    ]
+}
+
+/// The check a spot beside crawler `v` passes for a body of `radius` to
+/// stand on it, with its floor: in the arena, clear of discs and rock and
+/// of every foot's spot and each swinging foot's landing, its floor within
+/// `EXIT_LEVEL` of the highest floor the feet stand on. `None` for a
+/// vehicle without legs.
+fn exit_check<'a>(v: &'a VehicleState, radius: Fx, terrain: &'a Terrain) -> Option<impl Fn(FxVec2) -> Option<(FxVec2, Fx)> + 'a> {
+    let legs = v.legs.as_ref()?;
     // The highest floor it stands on: a foot down in a trench doesn't
     // lead its elders down there.
     let level = (0..4).map(|i| legs.landing(i).1).max()?;
-    // Each seat tries its own spot first, so four climbing down together
-    // land apart: the pilot's beside the middle, the front riders' beside
-    // the back, the back rider's behind.
-    let first = match place {
-        None => 0,
-        Some(p) if RIDERS[p as usize].across == Fx::ZERO => 6,
-        Some(_) => 1,
-    };
-    let offsets = std::iter::once(offsets[first]).chain(offsets.into_iter().enumerate().filter(|&(i, _)| i != first).map(|(_, o)| o));
     let spots: Vec<FxVec2> = legs.feet.iter().map(|f| f.spot).chain(legs.feet.iter().filter_map(|f| f.swing.as_ref().map(|s| s.to))).collect();
     let clearance = FOOT_RADIUS + radius + EXIT_FOOT_GAP;
-    offsets.into_iter().find_map(|o: Offset| {
-        let p = pose.at(o);
+    Some(move |p: FxVec2| {
         if !terrain.inside(p) || !terrain.clear(p, p, radius) {
             return None;
         }
@@ -768,7 +832,7 @@ impl Settlement {
                     .agents
                     .iter()
                     .enumerate()
-                    .filter(|(_, a)| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.inside()))
+                    .filter(|(_, a)| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.sheltered()))
                     .filter(|(_, a)| under_foot(terrain, spot, floor, a.body.position, a.radius(), a.height()))
                     .map(|(i, _)| i as AgentIx)
                     .collect();
@@ -792,7 +856,7 @@ impl Settlement {
         let mut shoved = 0;
         for a in agents {
             let Some(agent) = self.agents.get(a as usize) else { continue };
-            let seated = agent.avatar().is_some_and(|p| p.seat.is_some()) || agent.sprite().is_some_and(|s| s.inside());
+            let seated = agent.avatar().is_some_and(|p| p.seat.is_some()) || agent.sprite().is_some_and(|s| s.sheltered());
             let (position, radius, height) = (agent.body.position, agent.radius(), agent.height());
             if !agent.body.alive() || seated || !under_foot(terrain, spot, floor, position, radius, height) {
                 continue;

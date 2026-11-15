@@ -4,7 +4,8 @@
 //! the Burst key (`Action::Burst`, `Settlement::bursts`): it flies from the
 //! ballista to the reticle (`Settlement::fireballs`), costs no ammo, and
 //! starts the elder's own cooldown (`AvatarState::fireball_ready`), apart
-//! from a gatherer's Burst.
+//! from a gatherer's Burst. An elder at a crawler's gun throws one the same
+//! way (TU.2 of the crawler turret), from the gun's mount (`Mount::Gun`).
 //!
 //! Each tick, in stage 5 after the shots (`Settlement::burn`):
 //!
@@ -30,6 +31,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::buildings::BuildingIx;
+use super::vehicle::VehicleIx;
 use super::{AgentIx, Event, Impact, Settlement};
 use crate::nav::distance;
 
@@ -60,12 +62,22 @@ pub struct BurnDef {
     pub linger: u64,
 }
 
-/// A fireball in flight, from a ballista to its elder's reticle.
+/// What a ballista's shot or fireball leaves from: a ballista building, or
+/// a crawler's gun (TU.2 of the crawler turret).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mount {
+    Building(BuildingIx),
+    Gun(VehicleIx),
+}
+
+/// A fireball in flight, from a ballista (or a crawler's gun) to its
+/// elder's reticle.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fireball {
     pub id: u64,
     pub agent: AgentIx,
-    pub building: BuildingIx,
+    /// What threw it (format 51: it was a building's index).
+    pub mount: Mount,
     pub from: FxVec2,
     /// Above the ground at `from`.
     pub launch_height: Fx,
@@ -111,18 +123,18 @@ pub struct Burn {
 }
 
 impl Settlement {
-    /// Stage 5 (`bursts`): throws a fireball of `def` from ballista
-    /// `building` to `to` for elder `agent`, and starts the elder's
+    /// Stage 5 (`bursts`): throws a fireball of `def` from `mount` (a
+    /// ballista, or a crawler's gun) at `from`, `launch_height` over the
+    /// ground there, to `to` for elder `agent`, and starts the elder's
     /// cooldown. The caller has checked it may (`burst_plan`).
-    pub(super) fn throw_fireball(&mut self, tick: u64, agent: AgentIx, building: BuildingIx, to: FxVec2, def: FireballDef, launch_height: Fx) {
-        let from = self.buildings[building as usize].position;
+    pub(super) fn throw_fireball(&mut self, tick: u64, agent: AgentIx, mount: Mount, from: FxVec2, to: FxVec2, def: FireballDef, launch_height: Fx) {
         let arrival = tick + content::scenario::ticks(distance(from, to) / def.speed);
         let id = self.id();
-        self.fireballs.push(Fireball { id, agent, building, from, launch_height, to, born: tick, arrival, def });
+        self.fireballs.push(Fireball { id, agent, mount, from, launch_height, to, born: tick, arrival, def });
         if let Some(avatar) = self.agents[agent as usize].avatar_mut() {
             avatar.fireball_ready = tick + def.cooldown;
         }
-        self.events.push(Event::FireballThrown { agent, building, to, arrival });
+        self.events.push(Event::FireballThrown { agent, mount, to, arrival });
     }
 
     /// Stage 5, after the shots: fireballs land, fires burn out, threats in

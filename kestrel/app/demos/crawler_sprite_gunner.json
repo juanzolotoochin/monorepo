@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "scene": "crawler-lab",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 2300,
+  "steps": [
+    { "op": "wait", "frames": 20 },
+    { "op": "walk", "position": [0.6, 0] },
+    { "op": "wait", "frames": 20 },
+    { "op": "board" },
+    { "op": "wait", "frames": 10 },
+    { "op": "settlement_sprite_job", "sprite": "sprite_ash", "job": "crew" },
+    { "op": "wait", "frames": 229 },
+    { "op": "drive", "direction": [0.8, 0.6] },
+    { "op": "wait", "frames": 298 },
+    { "op": "drive", "direction": [0, 0] },
+    { "op": "wait", "frames": 548 },
+    { "op": "drive", "direction": [0.6, -0.8] },
+    { "op": "wait", "frames": 133 },
+    { "op": "drive", "direction": [-0.45, -0.893] },
+    { "op": "wait", "frames": 478 },
+    { "op": "drive", "direction": [0, 0] },
+    { "op": "wait", "frames": 503 }
+  ]
+}

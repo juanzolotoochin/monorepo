@@ -38,16 +38,18 @@
         (shape: Box, at: (0, -0.5, 2.78), size: (1.4, 0.7, 0.3), material: Brass),
         (shape: Cylinder, at: (0, -0.45, 2.98), size: (0.38, 0.14, 0.38), turn: (90, 0, 0), material: Lamp),
         // The cab, on the deck's front half: timber walls, a dark window
-        // band, a brass roof and a stack; the pilot stands at the helm
-        // behind it, on the deck's middle.
+        // band and a brass roof; the pilot stands at the helm behind it, on
+        // the deck's middle. The stack and the dome stand on the deck in
+        // front of the cab, clear of the gun swivelling on the roof
+        // (`gun`, below).
         (shape: Box, at: (0, 0.55, 1.55), size: (1.9, 1.1, 1.5), material: Timber),
         (shape: Box, at: (0, 0.86, 1.55), size: (1.94, 0.26, 1.54), material: Iron),
         (shape: Box, at: (0, 0.12, 1.55), size: (1.96, 0.12, 1.56), material: Brass),
         (shape: Box, at: (0, 1.16, 1.55), size: (2.1, 0.14, 1.75), material: Brass),
         (shape: Box, at: (0, 1.27, 1.55), size: (1.5, 0.1, 1.2), material: Brass),
-        (shape: Cylinder, at: (0.55, 1.75, 1.95), size: (0.34, 1.1, 0.34), material: Iron),
-        (shape: Cylinder, at: (0.55, 2.28, 1.95), size: (0.44, 0.1, 0.44), material: Brass),
-        (shape: Cylinder, at: (-0.55, 1.42, 1.9), size: (0.5, 0.3, 0.5), material: Brass),
+        (shape: Cylinder, at: (0.55, 1.1, 2.75), size: (0.3, 2.2, 0.3), material: Iron),
+        (shape: Cylinder, at: (0.55, 2.22, 2.75), size: (0.4, 0.1, 0.4), material: Brass),
+        (shape: Cylinder, at: (-0.55, 0.15, 2.75), size: (0.4, 0.3, 0.4), material: Brass),
         // The helm.
         (shape: Cylinder, at: (0, 0.42, 0.6), size: (0.12, 0.84, 0.12), material: Brass),
         (shape: Cylinder, at: (0, 0.86, 0.55), size: (0.62, 0.05, 0.62), turn: (75, 0, 0), material: Brass),
@@ -72,6 +74,34 @@
         (shape: Box, at: (0, 0.42, -1.6), size: (0.08, 0.54, 0.88), material: Leather),
         (shape: Box, at: (-0.9, 0.95, -2.75), size: (0.04, 1.3, 0.04), material: Iron),
         (shape: Box, at: (-0.9, 1.45, -2.98), size: (0.03, 0.3, 0.42), material: Cloth),
+    ],
+    // The gun (TU.5 of the crawler turret, CRAWLER_TURRET.md T1; bigger,
+    // darker and with a pale mantlet in TU.6, to read against the brass
+    // cab from the lab's camera): a swivel ballista on the cab's roof.
+    // Its pieces are in its own frame: the origin at the gun's mount
+    // (`crawler.gun.mount` and `height` in content/data/character/crawler.ron),
+    // which is the bow's height, where bolts leave from, half a meter over
+    // the roof; y up and z toward its aim. The view turns it about y to the
+    // aim. Everything stays within 1.1 m of the mount, clear of the stack.
+    gun: [
+        // An iron turntable on the roof with a brass rim, a post and a yoke.
+        (shape: Cylinder, at: (0, -0.41, 0), size: (1.0, 0.14, 1.0), material: Iron),
+        (shape: Cylinder, at: (0, -0.33, 0), size: (0.8, 0.04, 0.8), material: Brass),
+        (shape: Cylinder, at: (0, -0.2, 0), size: (0.3, 0.26, 0.3), material: Iron),
+        (shape: Box, at: (0, -0.06, 0), size: (0.56, 0.1, 0.46), material: Iron),
+        // The stock along the aim, a brass winch at its back and a pale
+        // canvas mantlet trimmed in brass, which reads against the cab.
+        (shape: Box, at: (0, 0.0, 0.14), size: (0.32, 0.22, 1.86), material: DarkTimber),
+        (shape: Cylinder, at: (0, 0.02, -0.64), size: (0.34, 0.7, 0.34), turn: (0, 0, 90), material: Brass),
+        (shape: Box, at: (0, 0.18, 0.02), size: (1.0, 0.56, 0.08), material: Canvas),
+        (shape: Box, at: (0, 0.47, 0.02), size: (1.04, 0.06, 0.1), material: Brass),
+        // The bow across its front at the mount's height, brass tips, and
+        // a bolt laid on the stock with a brass head.
+        (shape: Box, at: (0, 0.0, 0.66), size: (1.5, 0.12, 0.16), material: DarkTimber),
+        (shape: Box, at: (0.73, 0.0, 0.58), size: (0.09, 0.24, 0.14), material: Brass),
+        (shape: Box, at: (-0.73, 0.0, 0.58), size: (0.09, 0.24, 0.14), material: Brass),
+        (shape: Cylinder, at: (0, 0.13, 0.42), size: (0.08, 1.24, 0.08), turn: (90, 0, 0), material: Iron),
+        (shape: Box, at: (0, 0.13, 0.98), size: (0.12, 0.12, 0.12), material: Brass),
     ],
     leg: (
         // A brass drum on the deck's corner the leg turns on.

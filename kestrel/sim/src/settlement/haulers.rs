@@ -287,6 +287,10 @@ pub(super) struct Ctx<'a> {
     /// The player's avatar as it stood last tick, where and its feet's
     /// height: what the test walker follows (`follow`).
     pub leader: Option<(FxVec2, Fx)>,
+    /// Who mans each vehicle's gun, an elder or a sprite, as of last tick
+    /// (`Settlement::gun_crew`): what a crew sprite's brain reads to tell a
+    /// free gun (TU.4 of the crawler turret).
+    pub crews: &'a [Option<AgentIx>],
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {
@@ -299,7 +303,7 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
         },
         // Players walk on their own; haulers and sprites follow routes.
         next: a.avatar().is_none().then(|| a.body.route.first().copied()).flatten(),
-        solid: a.sprite().is_none_or(|sprite| !sprite.inside() && a.body.alive()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
+        solid: a.sprite().is_none_or(|sprite| !sprite.sheltered() && a.body.alive()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
         height: a.height(),
     }
 }

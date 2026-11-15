@@ -166,6 +166,45 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
   `app/actors/crawler.ron`, `app/src/vehicles.rs`.
 - **Found in:** CR.1–CR.6.
 
+## Play the crawler's turret
+
+- **Status:** open
+- **Why:** the crawler's gun ([`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md))
+  is a prototype tuned by tests, a soak and two videos (TU.6); nobody has
+  manned it in play.
+- **What to do:** in the Crawler Lab (F4 steps to it), with a second
+  player or a sprite, judge:
+  - **Two players, one crawler.** One pilots (G takes the cab first), the
+    other takes the gun (G again: the cab, then the gun, then the deck).
+    Does driving to the ghouls while the other shoots feel like teamwork,
+    or does the gunner just wait for the pilot to stop?
+  - **Aiming from a moving mount.** The reticle is an offset from the gun
+    and rides with the crawler, cut to 7 m; bolts every 0.7 s, the
+    fireball (R, RB) every 25 s. Ghouls walking across the line of fire
+    are easy to miss at 8 m/s: is leading them fun, or fiddly?
+  - **Range and height.** The gun's bow is about 4.8 m up and reaches 7 m
+    on the ground, on any floor below it. Is 7 m enough from up there, and
+    does the camera pull-back (1.4) show the whole ring?
+  - **The gun in the view.** A dark iron-and-timber ballista on the brass
+    cab's roof, about 1.4 m across the bow, turning to the aim. Does it
+    read at the lab's camera, and is it clear who is shooting?
+  - **Sprite gunners.** E on a sprite (or J) gives it the crew job; it
+    walks over and climbs up only while the crawler stands still, then
+    shoots the nearest ghoul in range by itself. It aims where the ghoul
+    is, not where it will be, so it misses ghouls walking across its line
+    (see "A sprite gunner doesn't lead a crossing ghoul" in
+    `todo/vehicles.md`). Is waiting for it to board annoying?
+  - **Bumping and restocking.** An elder boarding takes the gun from a
+    sprite (it moves to a free rider's place or climbs down). Stone (20)
+    is loaded by hand: E at the pile, E beside the stopped crawler; a
+    walking crawler takes none. Is stopping to restock a good beat or a
+    chore?
+- **Where:** `sim/src/settlement/gun.rs`, `crew.rs`, `interact.rs`,
+  `content/data/character/crawler.ron`, `app/actors/crawler.ron`,
+  `app/src/input/town.rs`, demos `crawler_gunner.json` and
+  `crawler_sprite_gunner.json`.
+- **Found in:** TU.1–TU.6.
+
 ## Look at the town's ground
 
 - **Status:** open

@@ -333,7 +333,7 @@ impl Settlement {
         if let Some(avatar) = a.avatar() {
             return a.body.alive() && avatar.seat.is_none();
         }
-        a.sprite().is_some_and(|sprite| a.body.alive() && !sprite.inside())
+        a.sprite().is_some_and(|sprite| a.body.alive() && !sprite.sheltered())
     }
 
     /// Whether threat `t` still chases agent `agent`: chaseable, within the

@@ -223,6 +223,39 @@ pub struct BuildingFire {
     pub to: FxVec2,
 }
 
+/// A crew sprite beside a still crawler asks to climb to its gun
+/// (`Settlement::crew_guns`, TU.4 of the crawler turret).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrewGun {
+    pub agent: u16,
+    pub vehicle: u16,
+}
+
+impl StateHash for CrewGun {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.vehicle);
+    }
+}
+
+/// A crawler's gun, manned by a sprite, shoots at a threat's current
+/// position (`Settlement::gun_fire`, TU.2 of the crawler turret), as a
+/// ballista building's `BuildingFire`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GunFire {
+    pub vehicle: u16,
+    pub target: u64,
+    pub to: FxVec2,
+}
+
+impl StateHash for GunFire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.vehicle);
+        h.write(&self.target);
+        h.write(&self.to);
+    }
+}
+
 /// A threat changes what it is after (`SACRED_TREE_BALLISTA.md`, B5,
 /// `Settlement::threat_goals`): it turns on a quarry, or gives up on one and
 /// heads for the tree again.
@@ -525,6 +558,26 @@ impl StateHash for ElderFire {
     }
 }
 
+/// An elder at a crawler's gun shoots at its reticle, `offset` from the
+/// gun's mount (TU.2 of the crawler turret): stage 5 launches the bolt from
+/// where the mount is then, to the mount plus the offset, if the elder
+/// still mans `vehicle`'s gun and it is stocked and reloaded
+/// (`Settlement::gunner_fire`), and does nothing otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GunnerFire {
+    pub agent: u16,
+    pub vehicle: u16,
+    pub offset: FxVec2,
+}
+
+impl StateHash for GunnerFire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.vehicle);
+        h.write(&self.offset);
+    }
+}
+
 /// A Burst that couldn't start, and why: stage 5 reports it as
 /// `Event::BurstRefused`, for the view to explain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,6 +680,10 @@ fn hash_holder(h: &mut StateHasher, other: InventoryRef) {
             h.write_u64(5);
             h.write(&b);
         }
+        InventoryRef::Gun(v) => {
+            h.write_u64(6);
+            h.write(&v);
+        }
     }
 }
 
@@ -652,6 +709,8 @@ pub struct ActionMessages {
     pub burst: Vec<Burst>,
     pub burst_refused: Vec<BurstRefused>,
     pub elder_fire: Vec<ElderFire>,
+    /// Elders at crawlers' guns (TU.2 of the turret).
+    pub gunner_fire: Vec<GunnerFire>,
 }
 
 impl ActionMessages {
@@ -659,6 +718,7 @@ impl ActionMessages {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
             && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
             && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty() && self.elder_fire.is_empty()
+            && self.gunner_fire.is_empty()
     }
 }
 
@@ -694,6 +754,9 @@ impl StateHash for ActionMessages {
         }
         if !self.elder_fire.is_empty() {
             h.write(&self.elder_fire);
+        }
+        if !self.gunner_fire.is_empty() {
+            h.write(&self.gunner_fire);
         }
     }
 }
@@ -929,4 +992,11 @@ message_queues! {
     // they hash last and only when there are any; stage 5 applies them
     // after the threats' swings.
     foot_lands: FootLands,
+    // Crawlers' guns' shots by sprites (TU.2 of the turret), after the
+    // ballista buildings'. Hashed only when there are any.
+    gun_fire: GunFire,
+    // Crew sprites climbing to a crawler's gun (TU.4 of the turret), last
+    // in stage 5, after the elders' boarding. Hashed only when there are
+    // any.
+    crew_gun: CrewGun,
 }
