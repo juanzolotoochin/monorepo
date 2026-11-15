@@ -517,6 +517,10 @@ pub enum Event {
     /// (CR.5 of the crawler), shoving `shoved` bodies off its spot and
     /// stomping `stomped` threats (each also a `Hit` with `Impact::Stomp`).
     Footfall { vehicle: super::VehicleIx, leg: u8, position: FxVec2, floor: Fx, shoved: u8, stomped: u8 },
+    /// Player `agent` landed from a fall of `height` meters, which took
+    /// `damage` health (`killed` if that was the last; K7 of the climbing
+    /// design). Only falls that hurt.
+    Fell { agent: AgentIx, height: Fx, damage: u32, killed: bool },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

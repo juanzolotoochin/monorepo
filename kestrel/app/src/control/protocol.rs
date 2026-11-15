@@ -99,9 +99,16 @@ pub enum Command {
     /// Turns the town's view `turns` quarter turns around the camera's
     /// target, as Z (positive, counter-clockwise seen from above) or C
     /// (negative, clockwise) does; the turn then eases over a quarter
-    /// second. View only. Fails outside a town.
+    /// second. View only. Fails outside a town or a `TurningView` scene
+    /// (the Climbing Gym).
     CameraRotate {
         turns: i32,
+    },
+    /// Zooms the view to show `height` meters top to bottom, as the wheel
+    /// does (it eases there), within the scene's range: 3 to 26 m, or to
+    /// the scene's own `zoom_out`. View only.
+    CameraZoom {
+        height: f32,
     },
     /// Possesses building `building` (its index), as interacting with its
     /// slot or the boarding key does: walks the elder beside it first when
@@ -158,8 +165,12 @@ pub enum Command {
     Jetpack {
         enabled: bool,
     },
-    /// Climbs into the nearest vehicle, or out of the one driven.
+    /// Climbs into the nearest vehicle, or out of the one driven; on a
+    /// face, lets go of it (CL.2).
     Board,
+    /// Jumps, as Space does: for a climber at a face a grab up it, on a
+    /// face a lunge the stick's way (CL.2).
+    Jump,
     /// Holds the movement stick this way (arena x and z, length up to 1);
     /// a driver steers their vehicle with it.
     Drive {

@@ -877,6 +877,34 @@ pub fn tick(world: &mut World) {
                 feedback.trauma = feedback.trauma.max(if *killed { 0.45 } else { 0.3 });
             }
         }
+        // A fall that hurt (CL.3) lands with a thud: dust off the floor
+        // round the feet, more the harder it was, and for the local player
+        // a shake. No blood: nothing struck them.
+        if let Event::Fell { agent, damage, killed } = event {
+            let mine = me.as_deref() == Some(agent.as_str());
+            let at = match sim.agents.get(agent) {
+                Some(a) if !mine => {
+                    let p = Vec3::new(a.position[0], 0.0, a.position[1]);
+                    p + Vec3::Y * town_ground(world, p)
+                }
+                _ => pos,
+            };
+            let puffs = (1 + damage / 2).min(4);
+            world.resource_scope(|world, assets: Mut<crate::effects::FxAssets>| {
+                let mut commands = world.commands();
+                for k in 0..puffs {
+                    let angle = k as f32 * std::f32::consts::TAU / puffs as f32;
+                    let offset = if puffs == 1 { Vec3::ZERO } else { Vec3::new(angle.cos(), 0.0, angle.sin()) * 0.45 };
+                    crate::effects::impact(&mut commands, &assets, at + offset + Vec3::Y * 0.05, Vec3::Y, (sim.tick as u32).wrapping_add(k * 131), voxel_assets::ImpactResponse::Stone);
+                }
+            });
+            world.flush();
+            world.resource::<crate::sound::Sound>().play(crate::sound::Cue::Stone);
+            if mine {
+                let mut feedback = world.resource_mut::<crate::effects::Feedback>();
+                feedback.trauma = feedback.trauma.max(if *killed { 0.45 } else { (0.12 + 0.05 * *damage as f32).min(0.4) });
+            }
+        }
         // An enemy's blow on a building strikes sparks off it; breaking it
         // bursts it in sparks and says so (B8).
         if let Event::BuildingStruck { building, from, hit: true, .. } = event {
@@ -967,6 +995,9 @@ pub fn tick(world: &mut World) {
             Event::PinnedLanded { .. } => Some(crate::sound::Cue::GhoulHit),
             Event::BlockedShot { .. } => Some(crate::sound::Cue::Stone),
             Event::ThreatSwing { hit: true, .. } => Some(crate::sound::Cue::GhoulHit),
+            // A hurting fall lands heavily; a killing one sounds as a kill.
+            Event::Fell { killed: false, .. } => Some(crate::sound::Cue::Land),
+            Event::Fell { killed: true, .. } => Some(crate::sound::Cue::GhoulHit),
             Event::ThreatSwing { hit: false, .. } => Some(crate::sound::Cue::Swing),
             Event::BuildingStruck { hit: true, .. } => Some(crate::sound::Cue::Stone),
             Event::BuildingStruck { hit: false, .. } => Some(crate::sound::Cue::Swing),
@@ -991,6 +1022,7 @@ pub fn tick(world: &mut World) {
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
                     | Event::ThreatSwing { .. }
+                    | Event::Fell { .. }
                     | Event::BuildingStruck { .. }
                     | Event::BuildingBroken { .. }
                     | Event::FireballThrown { .. }
@@ -2867,6 +2899,19 @@ mod tests {
         };
         assert_eq!((*threat, agent.as_str(), *hit, *killed), (7, s.agents[0].id.as_str(), true, false));
         assert_eq!(*from, Some(view.threats[&7].position));
+    }
+
+    /// A fall that hurts (CL.3) shows as a fall of its own (CL.4): a thud
+    /// and dust, not a blow from nowhere.
+    #[test]
+    fn a_fall_that_hurts_lands_with_a_thud_of_its_own() {
+        let (config, s, center) = forest_with_a_ghoul();
+        let events = [sim::settlement::Event::Fell { agent: 0, height: Fx::from_int(10), damage: 3, killed: false }];
+        let view = Simulation::new(&config, None, &s, 100, 0.0, center, &events);
+        let [crate::legacy::Event::Fell { agent, damage, killed }] = view.events.as_slice() else {
+            panic!("expected one fall, got {:?}", view.events);
+        };
+        assert_eq!((agent.as_str(), *damage, *killed), (s.agents[0].id.as_str(), 3, false));
     }
 
     fn drawn_threat(windup: Option<(u64, u64)>, swung: Option<u64>) -> crate::legacy::Threat {

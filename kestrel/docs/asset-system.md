@@ -39,6 +39,18 @@ Each row below is a **different schema**. A path is an example source file, not 
 
 The `assets/` paths above are under `kestrel/app/`. Bazel connects the recipe and palette into a prefab, then connects prefabs, a scene layout, and an optional style into a scene pack. A RON file does not import another one by itself.
 
+A scene can also carry rules for play there. The Climbing Gym,
+`assets/levels/climbing_gym.ron` (`climbing-gym`, reached with F4 or
+`--scene climbing-gym`; see [`CLIMBING.md`](../CLIMBING.md)), shows the
+ones for a tall volume: `volume` (the ground as solid and empty boxes, up
+to 64 m), `zoom_out` (how far the view zooms out, in meters of height,
+26 to 96; the gym's 80), the `TurningView` feature (Z/C turn the view
+outside a town), `player_health` (the player's health in a scene without a
+scenario, so falls hurt; the gym's 6) and `ambient` (the ambient light's
+brightness in place of the style's, so faces in shade read; the gym's
+800). Its player, the elder, climbs by the `climb` section of its
+[character definition](character-definition.md).
+
 ## 1. Materials give surfaces their properties
 
 A material has a name, color, emissive color, metallic and roughness values, and an impact response such as `Stone` or `Metal`. Geometry refers to materials by name; the material itself has no shape. Style files such as `kestrel/app/assets/styles/combat.ron` hold named materials for their scene's architecture and skins.

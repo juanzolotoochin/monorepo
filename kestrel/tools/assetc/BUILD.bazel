@@ -18,7 +18,10 @@ rust_binary(
 rust_test(
     name = "assetc_test",
     size = "small",
-    compile_data = ["//kestrel/app/assets:levels/tunnel_lab.ron"],
+    compile_data = [
+        "//kestrel/app/assets:levels/climbing_gym.ron",
+        "//kestrel/app/assets:levels/tunnel_lab.ron",
+    ],
     crate = ":assetc",
     edition = "2021",
 )

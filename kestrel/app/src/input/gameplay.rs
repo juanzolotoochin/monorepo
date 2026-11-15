@@ -123,6 +123,7 @@ fn publish_scene(world: &mut World) {
     let diggable = scene.has_feature(SceneFeature::Digging) && scene.player().dig().is_some();
     let recording = world.get_resource::<crate::palimpsest::Memory>().is_some_and(|m| m.recording());
     let town = super::town::active(world);
+    let turns = super::town::turns_view(world);
     let mut utility = Vec::new();
     if diggable {
         utility.push(Utility::Dig);
@@ -148,7 +149,7 @@ fn publish_scene(world: &mut World) {
     let possessing = town && (super::town::possessing(world) || gunner);
     let ballista = possessing && super::town::aiming(world);
     let mut input = world.resource_mut::<InputService>();
-    input.set_scene(SceneContext { scenario, town, utility, recording });
+    input.set_scene(SceneContext { scenario, town, turns, utility, recording });
     input.set_placing(placing);
     input.set_possessing(possessing, ballista);
 }
@@ -189,12 +190,21 @@ pub fn dispatch(world: &mut World) {
     // A town has one target for every device, the sim's (`town`), in place
     // of the controller's nearby targets.
     let town = super::town::active(world);
-    if town {
+    // The view turns in a town and in a scene that asks for it.
+    let turns = super::town::turns_view(world);
+    if turns {
         let dt = world.resource::<Time>().delta_secs();
         world.resource_mut::<Dispatcher>().town.view.advance(dt);
+    }
+    if town {
         super::town::refresh(world);
     } else {
-        world.resource_mut::<Dispatcher>().town = default();
+        let mut dispatcher = world.resource_mut::<Dispatcher>();
+        let view = dispatcher.town.view;
+        dispatcher.town = default();
+        if turns {
+            dispatcher.town.view = view;
+        }
         if seated || frame.owner == Device::Gamepad {
             world.resource_scope(|world, mut dispatcher: Mut<Dispatcher>| dispatcher.targets.refresh(world, now));
         }
@@ -203,8 +213,8 @@ pub fn dispatch(world: &mut World) {
     if frame.blocked {
         return;
     }
-    // Z and C, or the D-pad's left and right, turn the town's view.
-    if town {
+    // Z and C, or the D-pad's left and right, turn the view.
+    if turns {
         world.resource_mut::<Dispatcher>().town.view.turn(frame.gameplay.turn);
     }
     if frame.gameplay.repair_pressed && world.resource::<SessionService>().settlement()
@@ -235,7 +245,9 @@ pub fn dispatch(world: &mut World) {
             town_feedback(world, fired);
         }
     }
-    let jumping = world.resource::<SceneView>().player().jump().is_some();
+    // A climber's Space is a jump too: it grabs a face or lunges on one.
+    let player = world.resource::<SceneView>().player();
+    let jumping = player.jump().is_some() || player.climb.is_some();
     for &edge in &frame.gameplay.edges {
         match edge {
             Edge::Attack => attack(world),

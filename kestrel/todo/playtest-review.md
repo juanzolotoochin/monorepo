@@ -231,6 +231,44 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 - **Where:** `app/src/` camera rig, `app/demos/sacred_tree_depths.json`.
 - **Found in:** M8.8.
 
+## Climb the gym
+
+- **Status:** open
+- **Why:** climbing ([`CLIMBING.md`](../CLIMBING.md)) is an exploration
+  reviewed only by video (CL.5) and a soak; its numbers were set from
+  the design and the demo, not from play. On branch `kestrel-climbing`.
+- **What to do:** play the Climbing Gym (F4 to step to it, or
+  `--scene climbing-gym`) and judge:
+  - **Grabbing.** Walking into a wall 1 m or taller and pushing 0.15 s
+    grabs it; brushing along a cliff doesn't, and a click-to-move route
+    never does. Too eager in the town (any 1 m wall), or too slow?
+  - **Speeds.** 1 m/s up, 1.5 m/s down and sideways. A 13.5 m pitch takes
+    about 13 s of holding the stick into the rock.
+  - **The wheel.** About 15 m up from full (15 s moving, 90 s hanging),
+    refilled in 2 s on any floor. The 40 m face needs its two ledges; the
+    summit's 30 m east face over the wing can't be climbed in one go.
+    Should hanging still drain at all?
+  - **Exhaustion.** Empty, the elder lets go and can't grab again until
+    the wheel is full on a floor; after any let-go, not until a floor. So
+    nothing catches a fall part way, and the chimney's two walls can't be
+    bridged. A catch (grab while falling, once) would be kinder.
+  - **The lunge.** Space on a face goes 2 m the stick's way for a fifth of
+    the wheel; at the foot of a wall it grabs 1.5 m up for free.
+  - **Falls.** Nothing under 5 m, then 1 health per 2.5 m: 17.5 m kills
+    the elder's 6. A wheel run out from the ground (about 15 m) takes 5.
+  - **Corners.** Outside corners wrap; inside ones turn only when the
+    stick is more along the face than up it (diagonally into a corner it
+    climbs straight up). Natural, or should a diagonal turn too?
+  - **Reading it.** The wheel by the body, the red "!" before a fall that
+    hurts, the cyan silhouette through rock, the 80 m zoom and Z/C. The
+    east and north faces stand in shade, lifted by the gym's own ambient
+    (800, the town's at noon; the style's is 180): enough, or too flat?
+    Would banding the stone by height help read how high the elder is?
+- **Where:** `content/data/character/elder.ron` (`climb`),
+  `sim/src/settlement/climb.rs`, `app/src/climb_view.rs`,
+  `app/assets/levels/climbing_gym.ron`.
+- **Found in:** CL.1–CL.5.
+
 ## Other follow-ups
 
 Smaller open work from these milestones, not decisions to review:

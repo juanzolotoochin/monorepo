@@ -986,7 +986,7 @@ mod tests {
                     .rem_euclid(std::f32::consts::TAU),
                 speed: (4.0 * motion.step_distance / 2.0) / motion.walk_speed,
                 turn: 0.0, aim_yaw: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
-                jump: None, attack: None, dig: None, motion,
+                jump: None, attack: None, dig: None, climb: None, motion,
             };
             let terrain = crate::character::foot_terrain(root, &pose,
                 |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance)));
@@ -1061,7 +1061,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y + 0.12, 0.0);
         let offsets = crate::character::foot_terrain(root, &pose,
@@ -1089,7 +1089,7 @@ mod tests {
             airborne: false,
             jump: None,
             attack: None,
-            dig: None,
+            dig: None, climb: None,
         };
         let sample = |distance: f32, pose: &crate::character::Pose| {
             let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y, distance);

@@ -4,6 +4,7 @@ mod assets;
 mod atmosphere;
 mod canopy;
 mod character;
+mod climb_view;
 mod character_catalog;
 mod clock_hud;
 mod combat;
@@ -207,6 +208,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<Assets<atmosphere::GrassMaterial>>()
         .init_resource::<Assets<cutaway::CutawayMaterial>>()
         .init_resource::<Assets<fog_dressing::FoggedMaterial>>()
+        .init_resource::<Assets<climb_view::SilhouetteMaterial>>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>();
     } else if offscreen {
@@ -259,6 +261,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         cutaway::register_shader(&mut app);
         app.add_plugins(bevy::pbr::MaterialPlugin::<fog_dressing::FoggedMaterial>::default());
         fog_dressing::register_shader(&mut app);
+        app.add_plugins(bevy::pbr::MaterialPlugin::<climb_view::SilhouetteMaterial>::default());
+        climb_view::register_shader(&mut app);
         // GPU particles (kestrel/VFX_SPIKE_HANDOFF.md): they need the renderer
         // and compute shaders, so the web build uses WebGPU.
         app.add_plugins(bevy_sprinkles::SprinklesPlugin);

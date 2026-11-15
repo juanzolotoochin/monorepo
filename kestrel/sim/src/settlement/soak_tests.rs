@@ -867,10 +867,10 @@ fn the_town_digs_and_lights_its_depths_through_three_nights() {
 // the mountain, the cave and over the bridge, the test walker following.
 
 /// A small deterministic generator for the soak's choices (xorshift64*).
-struct Dice(u64);
+pub(super) struct Dice(pub(super) u64);
 
 impl Dice {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
@@ -878,7 +878,7 @@ impl Dice {
     }
 
     /// From `0` up to, not including, `n`.
-    fn below(&mut self, n: u64) -> u64 {
+    pub(super) fn below(&mut self, n: u64) -> u64 {
         self.next() % n
     }
 
@@ -899,7 +899,7 @@ const TUNNEL_SOAK_TICKS: u64 = 120 * HZ;
 /// its five points over a wall or a passage without headroom), not under
 /// it, with its head under any ceiling; and the cells its body fills at its
 /// middle, from a layer over its feet to its head, are empty.
-fn standing_free(terrain: &crate::terrain::Terrain, who: &str, p: FxVec2, z: Fx, radius: Fx, tick: u64) {
+pub(super) fn standing_free(terrain: &crate::terrain::Terrain, who: &str, p: FxVec2, z: Fx, radius: Fx, tick: u64) {
     use crate::volume::{layer_at, BODY_HEIGHT};
     let floor = terrain.footprint_at(p, z, radius).unwrap_or_else(|| panic!("{who} has no floor at tick {tick}: {:?}, feet {z:?}", p - terrain.center));
     assert!(floor <= z + Fx::from_ratio(1, 100), "{who} stands under its floor {floor:?} at tick {tick}: {:?}, feet {z:?}", p - terrain.center);

@@ -906,6 +906,10 @@ pub fn update_hud(
         (
             if scene.player().jump().is_some() {
                 "JUMP / AIRBORNE"
+            } else if matches!(flight.jump, sim::settlement::avatar::JumpPhase::Airborne { .. }) {
+                // A climber off a face or a ledge (CL.5): a jetpack's descent
+                // never sets `Airborne`, and this one may hurt.
+                "FALLING"
             } else if flight.requested {
                 "JETPACK / HOVER"
             } else {

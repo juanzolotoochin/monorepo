@@ -211,6 +211,16 @@ pub struct AvatarState {
     /// (D3), where movement does nothing. Housekeeping keeps it in the seat.
     #[serde(default)]
     pub seat: Option<Seat>,
+    /// Climbing a face and the stamina wheel (`climb`, save format 53):
+    /// off any face with a full wheel for characters that don't climb.
+    #[serde(default)]
+    pub climbing: super::climb::Climbing,
+    /// The highest the feet have been in the fall under way, for a
+    /// climber (save format 54): set while `jump` is `Airborne`, kept on
+    /// the tick it lands for housekeeping to hurt it (`fall_housekeeping`,
+    /// K7), then cleared.
+    #[serde(default)]
+    pub fall_top: Option<Fx>,
 }
 
 /// Where a seated avatar sits (`AvatarState::seat`). Boarding enters the
@@ -314,6 +324,8 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
             avatar.respawn_at = 0;
             avatar.flight = Flight::default();
             avatar.jump = JumpPhase::Grounded;
+            avatar.climbing = super::climb::Climbing::default();
+            avatar.fall_top = None;
             body.velocity = FxVec2::ZERO;
             body.push = FxVec2::ZERO;
             avatar.intent = Some(Intent::Stop);
@@ -330,10 +342,23 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
             avatar.pile_failure = Some(error.to_string());
         }
     }
+    // On a face, climbing moves the avatar instead of walking.
+    if let Some(climb) = def.climb.as_ref().filter(|_| avatar.climbing.climb.is_some()) {
+        super::climb::step(body, avatar, tick, terrain, def, climb);
+        super::climb::track_fall(avatar, tick);
+        return;
+    }
     walk(body, avatar, tick, terrain, def);
+    // A climber without a jump of its own falls with its climb's gravity
+    // (off a face, or a ledge).
+    let fall = def.climb.as_ref().map(|c| JumpDef { prep: 1, land: c.land, velocity: Fx::ZERO, gravity: c.gravity });
     match def.jetpack() {
         Some(jetpack) => fly(body, avatar, terrain, radius, jetpack),
-        None => jump_step(body, avatar, tick, terrain, radius, def.jump()),
+        None => jump_step(body, avatar, tick, terrain, radius, def.jump().or(fall.as_ref())),
+    }
+    if let Some(climb) = def.climb.as_ref() {
+        super::climb::reach(body, avatar, tick, terrain, def, climb);
+        super::climb::track_fall(avatar, tick);
     }
 }
 
@@ -671,6 +696,11 @@ impl Settlement {
             return false;
         }
         avatar.respawn_at = tick + ticks_from_60hz(120);
+        // A climber dies off the face, on the floor under it.
+        if avatar.climbing.climb.take().is_some() {
+            avatar.height = terrain.footprint_at(body.position, avatar.height, Fx::ZERO).unwrap_or(avatar.height);
+            avatar.jump = JumpPhase::Grounded;
+        }
         avatar.swing = None;
         avatar.queued = None;
         avatar.queued_at = None;
@@ -686,6 +716,30 @@ impl Settlement {
         self.end_pile_job(agent, "You died. Haul canceled; cargo is retained.", "Haul canceled because the player died");
         self.restart_memory(terrain);
         true
+    }
+
+    /// Housekeeping: a climber that landed this tick from a fall of its
+    /// `safe_fall` or more is hurt (K7 of the climbing design,
+    /// `climb::fall_damage`), through `hurt_player`, so a fall that kills
+    /// ends what a killing blow does and the elder comes back at home.
+    /// Only where players have health (`Body::max_health`).
+    pub(crate) fn fall_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
+        for agent in 0..self.agents.len() {
+            let a = &self.agents[agent];
+            let Some(climb) = character_of(&self.characters, a).climb else { continue };
+            let Some(avatar) = a.avatar() else { continue };
+            let (JumpPhase::Landing { started }, Some(top)) = (avatar.jump, avatar.fall_top) else { continue };
+            if started != tick || a.body.max_health == 0 || !a.body.alive() {
+                continue;
+            }
+            let height = top - avatar.height;
+            let damage = super::climb::fall_damage(height, &climb);
+            if damage == 0 {
+                continue;
+            }
+            let killed = self.hurt_player(agent, damage, tick, terrain);
+            self.events.push(Event::Fell { agent: agent as AgentIx, height, damage, killed });
+        }
     }
 
     /// Holds and gives back carry jobs' units on their other side, in
@@ -1037,6 +1091,20 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         }
         None => {}
     }
+    // On a face, Board (G) lets go: there is nothing to board up there
+    // (K3). Interacting waits for the ground.
+    if let Some(climb) = avatar.climbing.climb {
+        match *action {
+            Action::Board => {
+                if !matches!(climb.phase, super::climb::ClimbPhase::Mantle { .. }) {
+                    super::climb::let_go(body, avatar, view.tick);
+                }
+                return;
+            }
+            Action::Interact(_) => return,
+            _ => {}
+        }
+    }
     match *action {
         Action::Board => {
             if body.alive() && avatar.dig.is_none() {
@@ -1067,7 +1135,12 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             }
         }
         Action::Jetpack(enabled) => jetpack(avatar, enabled, def),
-        Action::Jump => jump(avatar, view.tick, def),
+        // A climber's jump lunges on a face, or grabs one from the ground.
+        Action::Jump => {
+            if !(body.alive() && super::climb::jump(body, avatar, view.tick, view.terrain, def)) {
+                jump(avatar, view.tick, def);
+            }
+        }
         // A volume scene digs the volume in front, level, down or up as
         // told (V5 of the verticality design); the plain dig (F) level, or
         // a step down where nothing is left to take level (M8.8).
@@ -1466,7 +1539,7 @@ fn aim_at(avatar: &mut AvatarState, aim: FxVec2) {
 /// Starts a live avatar's attack with a weapon the scene offers, or buffers
 /// it during a swing.
 fn attack(body: &mut Body, avatar: &mut AvatarState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], def: &CharacterDef) {
-    if avatar.dig.is_some() {
+    if avatar.dig.is_some() || avatar.climbing.climb.is_some() {
         return;
     }
     let aim = aim.normalize_or_zero();
@@ -1548,7 +1621,7 @@ fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, ter
     let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
     let busy = avatar.swing.as_ref().is_some_and(|s| tick < s.until) || carrying;
     let flight = &avatar.flight;
-    if busy || avatar.dig.is_some() || flight.requested || flight.airborne {
+    if busy || avatar.dig.is_some() || flight.requested || flight.airborne || avatar.climbing.climb.is_some() {
         return;
     }
     if terrain.pit(tile) >= terrain.max_layers || !terrain.inside(Terrain::pit_center(tile)) {

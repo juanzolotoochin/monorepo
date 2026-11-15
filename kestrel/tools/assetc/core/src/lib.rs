@@ -368,7 +368,31 @@ pub struct Scene {
     /// A warm light that glows by night, such as the Sacred Tree's.
     #[serde(default)]
     pub glow: Option<NightGlow>,
+    /// How far the camera zooms out here, as the view's height in meters,
+    /// past the usual [`ZOOM_OUT`] (the Climbing Gym's, to see its whole
+    /// 40 m face). The camera then also stands further back from what it
+    /// looks at, so tall ground between them isn't cut off.
+    #[serde(default)]
+    pub zoom_out: Option<f32>,
+    /// The player's health in a scene without a scenario (a scenario sets
+    /// its own): without it nothing hurts the player there. The Climbing
+    /// Gym's, so its falls hurt and can kill (CL.3 of the climbing design).
+    #[serde(default)]
+    pub player_health: Option<u32>,
+    /// The ambient light's brightness here, in place of the style's (the
+    /// Climbing Gym's, so its faces in shade read: CL.5 of the climbing
+    /// design).
+    #[serde(default)]
+    pub ambient: Option<f32>,
 }
+
+/// The farthest the camera zooms out in a scene without its own
+/// `zoom_out`: the view's height in meters.
+pub const ZOOM_OUT: f32 = 26.0;
+/// The nearest it zooms in.
+pub const ZOOM_IN: f32 = 3.0;
+/// The farthest a scene's own `zoom_out` may go.
+pub const MAX_ZOOM_OUT: f32 = 96.0;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SceneFeature {
     MemoryTrial,
@@ -380,6 +404,9 @@ pub enum SceneFeature {
     /// The ground slopes between tiles, so pit edges are ramps, and walks
     /// stop at slopes steeper than a layer per tile instead of at steps.
     SlopedGround,
+    /// Z and C (the D-pad's left and right) turn the view a quarter turn,
+    /// as in a town, instead of choosing a weapon: the Climbing Gym's.
+    TurningView,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -730,6 +757,24 @@ impl ScenePack {
         if let Some(volume) = &self.scene.volume {
             validate_volume(&self.scene, volume)?;
         }
+        if let Some(health) = self.scene.player_health {
+            if self.scene.scenario.is_some() {
+                return Err("a scene with a scenario takes its player_health from the scenario".into());
+            }
+            if !(1..=100).contains(&health) {
+                return Err(format!("a scene's player_health is {health}, but must be from 1 to 100"));
+            }
+        }
+        if let Some(zoom) = self.scene.zoom_out {
+            if !(ZOOM_OUT..=MAX_ZOOM_OUT).contains(&zoom) {
+                return Err(format!("a scene's zoom_out is {zoom} m, but must be from {ZOOM_OUT} to {MAX_ZOOM_OUT}"));
+            }
+        }
+        if let Some(ambient) = self.scene.ambient {
+            if !(0.0..=2000.0).contains(&ambient) {
+                return Err(format!("a scene's ambient is {ambient}, but must be from 0 to 2000"));
+            }
+        }
         // Test walkers (V.7) walk a volume's floors, a few of them.
         if !self.scene.walkers.is_empty() {
             let Some(volume) = &self.scene.volume else { return Err("a scene's walkers walk a volume; give it one".into()) };
@@ -917,6 +962,9 @@ mod tests {
                 day_cycle: None,
                 lanterns: vec![],
                 glow: None,
+                zoom_out: None,
+                player_health: None,
+                ambient: None,
                 volume: None,
                 walkers: vec![],
                 instances: vec![Instance {
@@ -975,6 +1023,9 @@ mod tests {
                 day_cycle: None,
                 lanterns: vec![],
                 glow: None,
+                zoom_out: None,
+                player_health: None,
+                ambient: None,
                 volume: None,
                 walkers: vec![],
                 terrain: Some(Terrain {

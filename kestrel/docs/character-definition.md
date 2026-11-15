@@ -52,6 +52,7 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 | `crawler` | `(length: ..., width: ..., deck: ..., hip: (along: ..., across: ...), stance: (...), reach: ..., step: ..., gap: ..., walk: (cycle: ..., swing: ..., lift: ...), trot: (...), gun: (mount: (along: ..., across: ...), height: ..., defence: (...)))` | Optional, `Vehicle` only: a vehicle that walks on four legs ([crawler](../CRAWLER.md)). It sets `vehicle`'s `wheelbase`, `track`, `climb` and `seat`, which it leaves out. `gun` is optional. |
 | `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
 | `attack` | `(damage: integer, reach: number, windup: integer, cooldown: integer, knockback: number)` | Optional, `FollowRoute` only. How the character hits players in passing. |
+| `climb` | `(up: ..., down: ..., side: ..., wheel: ..., hang: ..., refill: ..., grab: ..., leap: ..., lunge: ..., lunge_time: ..., lunge_cost: ..., mantle: ..., fall: ..., land: ..., safe_fall: ..., fall_step: ...)` | Optional, `Player` only (the elder's). The character climbs walls and its falls hurt. See below. |
 
 `health.hp` is starting hit points. `health.breach_damage` is damage dealt on reaching the route's target. If supplied, `health.armor` must contain both `points` and `radius`; the armor absorbs hits and enlarges the collision radius until it breaks.
 
@@ -60,6 +61,20 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 `crawler` is in meters and 60 Hz frames. `length` and `width` are the body's (1 to 16 m), `deck` the pilot's floor over the planted feet (1 to 6 m). `hip` is where the front right leg joins the body, `along` its heading and `across` it from the middle, and `stance` where that foot rests standing still, no nearer the middle; the other legs mirror them. `reach` (1 to 12 m) must reach the resting foot from its hip. `step` is the highest a foot climbs or drops (at most the deck, and 3 m), `gap` the widest gap it crosses (at most `reach`). `walk` is the wave walk, one leg at a time, so its `swing` is at most a quarter of its `cycle`; `trot` moves diagonal pairs on boost, its `swing` at most half its `cycle`. `cycle` is 1 to 600 frames; `lift`, how high a swinging foot clears, defaults to 0.5 m. Until the crawler walks (CR.2) it rolls on four points under its hips, so the `vehicle` fields it sets are twice the hip's offsets, the step and the deck.
 
 `crawler.gun` is a gun on the crawler ([turret](../CRAWLER_TURRET.md), T1, T7), and with it a gunner's seat on the deck. `mount` is where it swivels, meters from the body's middle (`along` and `across`, either sign, over the body), and `height` how far over the deck (0 to 6 m); the crawler's stands on the cab's roof, 1.55 m ahead of the middle, its bow (where bolts leave) 1.8 m up, half a meter over the roof and about 4.8 m over its feet. `defence` is a ballista building's section, as in a scenario's `building_kinds` (`ammo`, `ammo_cap`, `range`, `period`, `damage`, `projectile_speed`, and optionally `muzzle_height`, `projectile` and `fireball`), with the same ranges; its `ammo` names an item by id; a character can't know a scenario's items, so it isn't checked, and in a scenario without that item the gun has nothing to load. The crawler's copies the Sacred Tree ballista's numbers but for a store of 20 and a 7 m range. The section is replaced as a whole by a variant, not merged.
+
+`climb` lets a player climb any face of a volume's rock 1 m or taller
+(the Climbing Gym, `kestrel/CLIMBING.md`). Speeds are meters per second
+on the face: `up`, and `down` and `side`. The stamina wheel lasts `wheel`
+seconds moving and `hang` seconds hanging still, and refills in `refill`
+seconds on any floor. `grab` is the frames of pushing into a face before
+grabbing it. Jump at a face's foot grabs `leap` meters up it; on a face it
+lunges `lunge` meters in `lunge_time` frames for `lunge_cost` of the
+wheel. `mantle` is the frames pulling over the top. Off a face or a ledge
+the character falls at `fall` m/s² and lands in `land` frames, and a fall
+from `safe_fall` meters takes 1 health, plus 1 for every `fall_step`
+meters more, where players have health. The elder's: 1, 1.5, 1.5 m/s; 15 s,
+90 s, 2 s; 9 frames; 1.5 m; 2 m in 20 frames for 0.2; 30 frames; 20 m/s²,
+8 frames; 5 m and 2.5 m (17.5 m takes its 6).
 
 `avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations, including `carry.transfer`, are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
 

@@ -713,6 +713,8 @@ pub enum Event {
     /// A threat's swing landed on player `agent` (`hit`) or missed. `from`
     /// is where the threat stands, if it still does.
     ThreatSwing { threat: u64, agent: String, from: Option<Point>, hit: bool, killed: bool },
+    /// Player `agent` landed a fall that hurt them by `damage` (CL.3, K7).
+    Fell { agent: String, damage: u32, killed: bool },
     /// Building `building` (an index into `Simulation::buildings`) put a
     /// unit in its output.
     BuildingProduced { building: usize },
@@ -1112,6 +1114,7 @@ impl Simulation {
                     s::Event::BuildingBroken { building } => Event::BuildingBroken { building: *building as usize },
                     s::Event::SpriteReturned { agent } => Event::SpriteReturned { agent: agent_name(*agent) },
                     s::Event::TreeFell => Event::TreeFell,
+                    s::Event::Fell { agent, damage, killed, .. } => Event::Fell { agent: agent_name(*agent), damage: *damage, killed: *killed },
                     s::Event::Dispelled { threat, position } => Event::Dispelled { target: *threat, position: p(*position) },
                     // Drawn by the crawler's view from the mirror's events
                     // (`vehicles::footfalls`).

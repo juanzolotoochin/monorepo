@@ -263,6 +263,15 @@ pub fn builds(world: &World) -> bool {
     world.resource::<SessionService>().settlement().is_some_and(|s| !s.building_kinds.is_empty())
 }
 
+/// Whether Z and C (the D-pad's left and right) turn the view: in a town,
+/// and in a scene with the `TurningView` feature (the Climbing Gym).
+pub fn turns_view(world: &World) -> bool {
+    active(world)
+        || world
+            .get_resource::<crate::scene_view::SceneView>()
+            .is_some_and(|scene| scene.has_feature(voxel_assets::SceneFeature::TurningView))
+}
+
 /// The player's target now and what using it does, by the sim's rule.
 fn current(world: &World) -> Option<(InteractTarget, Interaction)> {
     let service = world.resource::<SessionService>();

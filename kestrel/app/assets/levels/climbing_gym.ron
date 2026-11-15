@@ -1,0 +1,93 @@
+// The Climbing Gym (K1 of the climbing design, kestrel/CLIMBING.md): 128 x
+// 128 m of flat ground round a mountain 40 m tall, with faces of 5, 10, 20
+// and the full 40 m, ledges partway up the tall ones, an overhang, an
+// inside corner and a chimney; and three freestanding pillars, 5, 10 and
+// 15 m, on the flat to learn on. The elder starts on the flat south-east of
+// the mountain, by the pillars. No ghouls, no sprites.
+//
+// The volume is in cells: tiles (1 m; tile (x, z) is centered on scene
+// meters x, z) and layers (0.5 m; layer k from k * 0.5 to (k + 1) * 0.5 m,
+// so a box with `top: 20` makes a floor at 10 m). Boxes apply in order: a
+// later Empty carves an earlier Solid. The heights below are the floors on
+// top, over the ground's zero.
+//
+// Layout (tiles, x east, z south). The sun shines from the south-west and
+// the default camera looks from the south-east, so the faces that matter
+// most face south or west, in the light: the full 40 m face west, the
+// shoulder, chimney and inside corner south. East and north faces stand in
+// shadow.
+// - Ground: layers -8 to 0 everywhere (4 m deep), its floor at 0 m.
+// - The summit: x -10..10, z -20..0, 40 m (layer 80). Its north face
+//   (z -20) is a plain 40 m face from the ground; so is its south face
+//   from x -10 to -5.
+// - The west face, the full 40 m (facing -x), in three pitches of about
+//   13.5 m with a 2 m ledge between each: the ground to a ledge at 13.5 m
+//   (x -14..-13, layer 27), on to a ledge at 27 m (x -12..-11, layer 54),
+//   on to the summit (x -10) at 40 m. A wheel of about 15 m climbs each
+//   pitch.
+// - The south shoulder: x -4..10, z 1..8, 20 m (layer 40): its south face
+//   (z 8) is the 20 m face; over it the summit's south face climbs the
+//   other 20 m.
+// - The inside corner: at x -5..-4, z 0..1, where the shoulder's west face
+//   (x -4, facing -x, 20 m) meets the summit's south face (z 0, facing
+//   +z).
+// - The chimney: a slot 2 m wide (x 3..4) and 6 m deep (z 3..8) cut into
+//   the shoulder's south face, the full 20 m, open to the sky.
+// - The east wing: x 11..22, z -20..6, 10 m (layer 20): its east face
+//   (x 22) and south face (z 6) are 10 m faces. Over it the summit's east
+//   face (x 10) climbs 30 m with no ledge: more than a wheel.
+// - The low step: x 11..22, z 7..14, 5 m (layer 10): its south face
+//   (z 14) and east face are the 5 m faces; from its top the wing's south
+//   face is another 5 m.
+// - The overhang: a roof 4 m out from the wing's east face, x 23..26,
+//   z -14..-6, from 7 m to 10 m (layers 14..20): a climb up the wing's east
+//   face there meets its underside at 7 m. Under it the ground has a 7 m
+//   ceiling.
+// - The pillars, 2 x 2 tiles on the flat, a row along z 20..21: 5 m at
+//   x 24..25 (layer 10), 10 m at x 30..31 (layer 20), 15 m at x 36..37
+//   (layer 30).
+Scene(id: "climbing-gym", player: "elder", features: [Digging, SlopedGround, TurningView],
+    name: "CLIMBING GYM / 40 M",
+    // On the flat south-east of the mountain, just south of the pillars.
+    spawn: (28.0, 0.0, 26.0),
+    industrial: false,
+    instances: [],
+    // Far enough out to see the whole 40 m face from its foot (the view's
+    // height, m: the face stands 33 m tall on screen, over the elder in the
+    // middle).
+    zoom_out: Some(80.0),
+    // The elder's health, so falls hurt (5 m takes 1, each 2.5 m more
+    // another; the elder's climb section) and about 20 m kills (CL.3).
+    player_health: Some(6),
+    // The ambient light, the town's at noon over the style's 180: with the
+    // sun fixed from the south-west the east and north faces stand in
+    // shade, near black without it; a climber on them should read (CL.5).
+    ambient: Some(800.0),
+    volume: Some((
+        extent: 64,
+        boxes: [
+            // The ground.
+            Solid(min: (-64, -64), max: (64, 64), bottom: -8, top: 0),
+            // The summit, 40 m.
+            Solid(min: (-10, -20), max: (10, 0), bottom: 0, top: 80),
+            // The west face's lower pitch, to the 13.5 m ledge.
+            Solid(min: (-14, -20), max: (-11, 0), bottom: 0, top: 27),
+            // The west face's middle pitch, to the 27 m ledge.
+            Solid(min: (-12, -20), max: (-11, 0), bottom: 27, top: 54),
+            // The south shoulder, 20 m.
+            Solid(min: (-4, 1), max: (10, 8), bottom: 0, top: 40),
+            // The chimney, a 2 m slot down the shoulder's south face.
+            Empty(min: (3, 3), max: (4, 8), bottom: 0, top: 40),
+            // The east wing, 10 m.
+            Solid(min: (11, -20), max: (22, 6), bottom: 0, top: 20),
+            // The low step, 5 m.
+            Solid(min: (11, 7), max: (22, 14), bottom: 0, top: 10),
+            // The overhang, 7 m to 10 m, out from the wing's east face.
+            Solid(min: (23, -14), max: (26, -6), bottom: 14, top: 20),
+            // The pillars: 5 m, 10 m and 15 m.
+            Solid(min: (24, 20), max: (25, 21), bottom: 0, top: 10),
+            Solid(min: (30, 20), max: (31, 21), bottom: 0, top: 20),
+            Solid(min: (36, 20), max: (37, 21), bottom: 0, top: 30),
+        ],
+    )),
+)

@@ -19,6 +19,7 @@ mod agent;
 pub mod avatar;
 pub mod buildings;
 pub mod chase;
+pub mod climb;
 pub mod clock;
 pub mod combat;
 pub mod crawler;
@@ -360,6 +361,10 @@ pub struct SceneSetup {
     /// points, in scene meters, that follow the player
     /// (`SpriteJob::Follow`). They join the scenario's sprites.
     pub walkers: Vec<[Fx; 2]>,
+    /// The player's health in a scene without a scenario (a scenario has
+    /// its own `player_health`): 0, the default, for none, so nothing hurts
+    /// it; the Climbing Gym's 6, so falls can kill (CL.3).
+    pub player_health: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -625,7 +630,8 @@ impl Settlement {
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                let scenario = Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player);
+                let mut scenario = Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player);
+                scenario.player_health = setup.player_health;
                 Settlement::from_scenario(&Self::with_walkers(scenario, &setup.walkers), &[], terrain, content)?
             }
         };
@@ -1259,6 +1265,12 @@ impl Settlement {
         if floors.iter().any(|&h| h != Fx::ZERO) {
             bytes.extend(postcard::to_allocvec(&floors).expect("floors encode"));
         }
+        // And avatars' climbing only once any climbs or spends stamina
+        // (CL.2), so other scenes hash as they did.
+        let climbing: Vec<_> = self.agents.iter().filter_map(AgentState::avatar).map(|a| a.climbing).collect();
+        if climbing.iter().any(|c| *c != climb::Climbing::default()) {
+            bytes.extend(postcard::to_allocvec(&climbing).expect("climbing encodes"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -1314,6 +1326,14 @@ mod light_tests;
 mod dark_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod climbing_gym_tests;
+#[cfg(test)]
+mod climbing_tests;
+#[cfg(test)]
+mod fall_tests;
+#[cfg(test)]
+mod climbing_soak_tests;
 #[cfg(test)]
 mod combat_tests;
 #[cfg(test)]

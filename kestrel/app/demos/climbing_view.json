@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "scene": "climbing-gym",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 3600,
+  "steps": [
+    {
+      "op": "camera_zoom",
+      "height": 26
+    },
+    {
+      "op": "walk",
+      "position": [
+        -20,
+        20
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -15.6,
+        -1.2
+      ]
+    },
+    {
+      "op": "camera_rotate",
+      "turns": -1
+    },
+    {
+      "op": "camera_zoom",
+      "height": 10
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "drive",
+      "direction": [
+        1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 135
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 36
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -15.6,
+        -8
+      ]
+    },
+    {
+      "op": "camera_zoom",
+      "height": 12
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "drive",
+      "direction": [
+        1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 402
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    },
+    {
+      "op": "drive",
+      "direction": [
+        1,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 110
+    },
+    {
+      "op": "jump"
+    },
+    {
+      "op": "wait",
+      "frames": 12
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "drive",
+      "direction": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "camera_rotate",
+      "turns": 1
+    },
+    {
+      "op": "camera_zoom",
+      "height": 20
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "board"
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    }
+  ]
+}

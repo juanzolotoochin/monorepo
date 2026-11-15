@@ -256,7 +256,7 @@ fn focus_loss_suspends_and_held_controls_count_only_after_rest() {
 #[test]
 fn the_utility_panel_takes_controller_ui_and_confirms_one_action() {
     let mut rig = Rig::seated(1);
-    rig.input.set_scene(SceneContext { scenario: false, town: false, utility: vec![Utility::Dig, Utility::Record, Utility::Respawn], recording: false });
+    rig.input.set_scene(SceneContext { scenario: false, town: false, turns: false, utility: vec![Utility::Dig, Utility::Record, Utility::Respawn], recording: false });
     let frame = rig.tap(1, Button::View);
     assert_eq!(frame.suspended, Some(Suspend::Panel));
     assert!(frame.blocked);
@@ -344,7 +344,7 @@ fn keyboard_e_interacts_in_a_town() {
 #[test]
 fn keyboard_f_digs_in_a_town() {
     let mut rig = Rig::new();
-    rig.input.set_scene(SceneContext { scenario: true, town: true, utility: vec![Utility::Dig, Utility::Respawn], recording: false });
+    rig.input.set_scene(SceneContext { scenario: true, town: true, turns: false, utility: vec![Utility::Dig, Utility::Respawn], recording: false });
     rig.keys.press(KeyCode::KeyF);
     assert_eq!(rig.frame().gameplay.edges, vec![Edge::Utility(Utility::Dig)]);
 }
@@ -357,7 +357,7 @@ fn ctrl_and_alt_f_dig_down_and_up_in_a_volume() {
     for volume in [true, false] {
         let mut rig = Rig::new();
         let utility = if volume { vec![Utility::Dig, Utility::DigDown, Utility::DigUp, Utility::Respawn] } else { vec![Utility::Dig, Utility::Respawn] };
-        rig.input.set_scene(SceneContext { scenario: false, town: false, utility, recording: false });
+        rig.input.set_scene(SceneContext { scenario: false, town: false, turns: false, utility, recording: false });
         let (down, up) = if volume { (Utility::DigDown, Utility::DigUp) } else { (Utility::Dig, Utility::Dig) };
         for (modifier, expected) in [(None, Utility::Dig), (Some(KeyCode::ControlLeft), down), (Some(KeyCode::AltLeft), up), (Some(KeyCode::ControlRight), down), (Some(KeyCode::AltRight), up)] {
             if let Some(key) = modifier {
@@ -1563,6 +1563,14 @@ fn z_and_c_turn_the_view_in_a_town_and_still_pick_weapons_elsewhere() {
     assert_eq!((left.turn, left.edges), (1, vec![]), "D-pad left turns as Z does");
     let right = rig.tap(1, Button::DPadRight).gameplay;
     assert_eq!((right.turn, right.edges), (-1, vec![]), "D-pad right turns as C does");
+
+    // A scene that turns its view (the Climbing Gym's `TurningView`), not
+    // a town: Z, C and the D-pad turn it too.
+    rig.input.set_scene(SceneContext { turns: true, ..default() });
+    let z = key(&mut rig, KeyCode::KeyZ);
+    assert_eq!((z.turn, z.edges.clone()), (1, vec![]), "Z turns the gym's view");
+    let right = rig.tap(1, Button::DPadRight).gameplay;
+    assert_eq!((right.turn, right.edges), (-1, vec![]), "D-pad right turns the gym's view");
 
     rig.input.set_scene(SceneContext::default());
     let z = key(&mut rig, KeyCode::KeyZ);

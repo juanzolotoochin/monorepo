@@ -74,6 +74,48 @@ pub struct CharacterDef {
     /// one.
     #[serde(skip)]
     pub sprite: Option<SpriteDef>,
+    /// How a Player character climbs walls and the stamina wheel that
+    /// lasts (`kestrel/CLIMBING.md`, K2–K6): only the elder's has one, and
+    /// without it a character never climbs. Left out of the encoding like
+    /// `attack`; `rules_hash` adds it when any character has one.
+    #[serde(skip)]
+    pub climb: Option<ClimbDef>,
+}
+
+/// A climber's tuning, in simulation units (`kestrel/CLIMBING.md`, K3–K6).
+/// The wheel is stamina from 0 (empty) to 1 (full).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClimbDef {
+    /// Meters per tick up a face, down it, and along it.
+    pub up: Fx,
+    pub down: Fx,
+    pub side: Fx,
+    /// The wheel spent per tick moving on a face, and hanging still.
+    pub drain: Fx,
+    pub hang: Fx,
+    /// The wheel refilled per tick standing on a floor.
+    pub refill: Fx,
+    /// Ticks pushing into a face before grabbing on.
+    pub grab: u64,
+    /// Meters over the feet a jump at a face from the ground grabs.
+    pub leap: Fx,
+    /// A jump on a face: the meters it lunges, in how many ticks, and the
+    /// wheel it spends.
+    pub lunge: Fx,
+    pub lunge_ticks: u64,
+    pub lunge_cost: Fx,
+    /// Ticks pulling over the top of a face.
+    pub mantle: u64,
+    /// A fall's gravity, meters per tick per tick, and the ticks landing
+    /// takes, for a climber without a jump of its own: off a face, or
+    /// walking off a ledge.
+    pub gravity: Fx,
+    pub land: u64,
+    /// Falls hurt on landing (K7): a fall of `safe_fall` meters or more,
+    /// from its highest point to the floor it lands on, takes 1 health,
+    /// and each further `fall_step` meters another (`climb::fall_damage`).
+    pub safe_fall: Fx,
+    pub fall_step: Fx,
 }
 
 /// A sprite's health, in simulation units (`SACRED_TREE_BALLISTA.md`, B6).
@@ -462,6 +504,34 @@ pub(crate) struct SimFile {
     crawler: Option<CrawlerFile>,
     chase: Option<ChaseFile>,
     sprite: Option<SpriteFile>,
+    climb: Option<ClimbFile>,
+}
+
+/// A Player character's `climb`: m/s, seconds, 60 Hz frames, meters, a
+/// share of the wheel and m/s².
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct ClimbFile {
+    up: Option<Fx>,
+    down: Option<Fx>,
+    side: Option<Fx>,
+    /// Seconds a full wheel lasts moving on a face, and hanging still.
+    wheel: Option<Fx>,
+    hang: Option<Fx>,
+    /// Seconds an empty wheel takes to refill on a floor.
+    refill: Option<Fx>,
+    grab: Option<u64>,
+    leap: Option<Fx>,
+    lunge: Option<Fx>,
+    lunge_time: Option<u64>,
+    lunge_cost: Option<Fx>,
+    mantle: Option<u64>,
+    fall: Option<Fx>,
+    land: Option<u64>,
+    /// Meters: the shortest fall that hurts, and each further drop that
+    /// takes another health.
+    safe_fall: Option<Fx>,
+    fall_step: Option<Fx>,
 }
 
 /// A Vehicle character's `crawler`: meters and 60 Hz frames. It sets the
@@ -659,7 +729,8 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, crawler, chase, sprite });
+merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, crawler, chase, sprite, climb });
+merge_fields!(ClimbFile { up, down, side, wheel, hang, refill, grab, leap, lunge, lunge_time, lunge_cost, mantle, fall, land, safe_fall, fall_step } {});
 merge_fields!(CrawlerFile { length, width, deck, reach, step, gap, gun } { hip, stance, walk, trot });
 merge_fields!(OffsetFile { along, across } {});
 merge_fields!(GaitFile { cycle, swing, lift } {});
@@ -795,7 +866,49 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         return Err("only Sprite characters have `sprite`".into());
     }
     let sprite = file.sprite.map(sprite_def).transpose()?;
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle, crawler, chase, sprite })
+    if file.climb.is_some() && brain != Brain::Player {
+        return Err("only Player characters have `climb`".into());
+    }
+    let climb = file.climb.map(climb_def).transpose()?;
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle, crawler, chase, sprite, climb })
+}
+
+fn climb_def(file: ClimbFile) -> Result<ClimbDef, String> {
+    let get = |value: Option<Fx>, field: &str, lo: Fx, hi: Fx, unit: &str| -> Result<Fx, String> {
+        let value = need(value, &format!("climb.{field}"))?;
+        if !within(value, lo, hi) {
+            return Err(format!("climb.{field} must be in [{}, {}] {unit}", lo.to_f64(), hi.to_f64()));
+        }
+        Ok(value)
+    };
+    let frames = |value: Option<u64>, field: &str, hi: u64| -> Result<u64, String> {
+        let value = need(value, &format!("climb.{field}"))?;
+        if !(1..=hi).contains(&value) {
+            return Err(format!("climb.{field} must be 1..={hi} frames"));
+        }
+        Ok(ticks_from_60hz(value))
+    };
+    let (tenth, ten) = (Fx::from_ratio(1, 10), Fx::from_int(10));
+    // A wheel lasting `seconds` spends this much of it a tick.
+    let spend = |seconds: Fx| per_tick(Fx::ONE / seconds);
+    Ok(ClimbDef {
+        up: per_tick(get(file.up, "up", tenth, ten, "m/s")?),
+        down: per_tick(get(file.down, "down", tenth, ten, "m/s")?),
+        side: per_tick(get(file.side, "side", tenth, ten, "m/s")?),
+        drain: spend(get(file.wheel, "wheel", Fx::ONE, Fx::from_int(600), "s")?),
+        hang: spend(get(file.hang, "hang", Fx::ONE, Fx::from_int(3600), "s")?),
+        refill: spend(get(file.refill, "refill", tenth, Fx::from_int(60), "s")?),
+        grab: frames(file.grab, "grab", 60)?,
+        leap: get(file.leap, "leap", Fx::ZERO, Fx::from_int(4), "m")?,
+        lunge: get(file.lunge, "lunge", Fx::HALF, Fx::from_int(6), "m")?,
+        lunge_ticks: frames(file.lunge_time, "lunge_time", 120)?,
+        lunge_cost: get(file.lunge_cost, "lunge_cost", Fx::ZERO, Fx::ONE, "of the wheel")?,
+        mantle: frames(file.mantle, "mantle", 120)?,
+        gravity: per_tick(per_tick(get(file.fall, "fall", Fx::ONE, Fx::from_int(100), "m/s²")?)),
+        land: frames(file.land, "land", 60)?,
+        safe_fall: get(file.safe_fall, "safe_fall", Fx::ONE, Fx::from_int(80), "m")?,
+        fall_step: get(file.fall_step, "fall_step", tenth, Fx::from_int(80), "m")?,
+    })
 }
 
 fn crawler_def(file: CrawlerFile) -> Result<CrawlerDef, String> {

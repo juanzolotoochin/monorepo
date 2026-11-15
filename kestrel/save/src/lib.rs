@@ -169,7 +169,11 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     sprite keeps the rider's place it rides in (`SpriteState::rider`),
 ///     and the pending messages a queue of crew sprites climbing to a gun
 ///     (`Messages::crew_gun`).
-pub const FORMAT_VERSION: u32 = 52;
+/// 53: an avatar keeps its climbing (`AvatarState::climbing`: the face it
+///     holds, its phase, the stamina wheel; CL.2 of the climbing design).
+/// 54: an avatar keeps the top of the fall under way (`AvatarState::fall_top`,
+///     CL.3 of the climbing design), so a fall saved in the air hurts alike.
+pub const FORMAT_VERSION: u32 = 54;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

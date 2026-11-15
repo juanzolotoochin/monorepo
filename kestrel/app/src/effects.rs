@@ -698,13 +698,17 @@ pub fn camera_feedback(
     input: Res<debug_ui::GameInput>,
     actions: Res<crate::input::InputService>,
     dispatcher: Option<Res<crate::input::gameplay::Dispatcher>>,
+    scene: Option<Res<crate::scene_view::SceneView>>,
     vehicles: Option<Res<crate::vehicles::Vehicles>>,
     camera: Single<(&mut Transform, &mut Projection, &mut CameraRig), With<Camera>>,
 ) {
     let (mut transform, mut projection, mut rig) = camera.into_inner();
-    // The wheel, or the controller's D-pad: a view action only.
+    // The wheel, or the controller's D-pad: a view action only. A scene
+    // may zoom out further than most (the Climbing Gym, to see its 40 m
+    // face).
     let pad = if actions.frame().blocked { 0.0 } else { actions.frame().gameplay.zoom };
-    rig.zoom = (rig.zoom - input.scroll().y * 0.8 + pad).clamp(3.0, 26.0);
+    let out = zoom_out(scene.as_deref());
+    rig.zoom = (rig.zoom - input.scroll().y * 0.8 + pad).clamp(voxel_assets::ZOOM_IN, out);
     // Piloting a crawler pulls the view back (CR.3 of the crawler).
     let pull = vehicles.map_or(1.0, |v| v.pull());
     if let Projection::Orthographic(p) = &mut *projection {
@@ -721,9 +725,24 @@ pub fn camera_feedback(
     // The town's view turn orbits the camera around its target, at the
     // same height and distance (`input::town::ViewTurn`).
     let yaw = dispatcher.map_or(0.0, |d| d.town.view.yaw());
-    let base = rig.target + Quat::from_rotation_y(yaw) * (rig.base - rig.target);
+    let base = rig.target + Quat::from_rotation_y(yaw) * (rig.base - rig.target) * stand_back(out);
     *transform = Transform::from_translation(base + offset)
         .looking_at(rig.target + offset * 0.3, Vec3::Y);
+}
+
+/// The farthest the camera zooms out in this scene: its own `zoom_out`,
+/// else [`voxel_assets::ZOOM_OUT`].
+pub fn zoom_out(scene: Option<&crate::scene_view::SceneView>) -> f32 {
+    scene.and_then(|s| s.pack.scene.zoom_out).unwrap_or(voxel_assets::ZOOM_OUT)
+}
+
+/// How much further back than the rig's offset the camera stands, so a
+/// scene zoomed out past the usual (`zoom_out`) doesn't cut off tall ground
+/// between the camera and its target: the orthographic view is the same
+/// from further back, only nothing comes in front of the camera. 1 in other
+/// scenes, whose shadow cascades are tuned to the rig's distance.
+pub fn stand_back(zoom_out: f32) -> f32 {
+    if zoom_out > voxel_assets::ZOOM_OUT { 4.0 } else { 1.0 }
 }
 
 #[cfg(test)]
