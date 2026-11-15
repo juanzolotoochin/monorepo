@@ -276,6 +276,16 @@ impl SessionService {
         self.session.queue(kind);
     }
 
+    /// Sends a command as another player (a demo script's guest): a host
+    /// applies it on its next tick, a replay ignores it; a client refuses.
+    pub fn command_as(&mut self, player: sim::PlayerId, kind: CommandKind) -> Result<(), String> {
+        if self.session.queue_as(player, kind) {
+            Ok(())
+        } else {
+            Err("Guests need a host".into())
+        }
+    }
+
     /// Puts a weapon in the avatar's hand, for every peer to see; the local
     /// view switches right away.
     pub fn equip(&mut self, weapon: content::scenario::Weapon) {

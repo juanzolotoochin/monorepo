@@ -17,6 +17,7 @@ impl Settlement {
     pub(crate) fn self_update(&mut self, tick: u64, terrain: &Terrain) {
         self.events.clear();
         self.threats_self_update(tick, terrain);
+        let standing = self.standing_for_crawlers();
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
         let items = self.depot_items();
         // Miners' dig claims as of last tick, and where their stone goes.
@@ -56,7 +57,7 @@ impl Settlement {
         };
         let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, errands: &errands, stone, amber, danger: &danger, leader };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
-        self.vehicles_self_update(terrain);
+        self.vehicles_self_update(terrain, &standing);
         self.release_distant_piano_notes();
     }
 
@@ -75,6 +76,7 @@ impl Settlement {
             })
             .collect();
         result.extend(self.read_combat(tick, terrain));
+        result.extend(self.read_footfalls(terrain));
         result
     }
 

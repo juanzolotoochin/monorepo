@@ -846,3 +846,61 @@ fn a_towns_volume_is_saved_as_its_edits() {
     assert_eq!(loaded.terrain().volume.as_ref().unwrap().ore(cell.0, cell.1), None);
     assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
 }
+
+/// A crawler carrying a pilot and two riders (format 48: `Seat::Rider`)
+/// saves and loads with everyone in their place, saves again to the same
+/// bytes, and walks on alike.
+#[test]
+fn a_crawler_saved_with_riders_aboard_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    use sim::settlement::Seat;
+    use sim::{Command, CommandKind, PlayerId, Simulation};
+    let content = Content::builtin();
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-16, -16), (16, 16), -8, 0);
+    let setup = sim::settlement::SceneSetup {
+        player: "elder".into(),
+        extent: Fx::from_int(16),
+        sloped: true,
+        volume: Some(volume),
+        vehicles: vec![sim::settlement::VehicleSetup { character: "crawler".into(), position: [Fx::from_ratio(5, 2), Fx::ZERO], heading: Fx::ZERO }],
+        ..Default::default()
+    };
+    let mut sim = Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    let guests = [PlayerId(1), PlayerId(2)];
+    sim.step(&guests.map(|player| Command { player, kind: CommandKind::Join }));
+    let s = sim.world().settlement().unwrap();
+    let agents = [s.player().unwrap(), s.avatar_of(guests[0]).unwrap(), s.avatar_of(guests[1]).unwrap()];
+    let center = sim.world().terrain().center;
+    // Each walks up to the crawler's west side and climbs aboard.
+    let go: Vec<_> = (0..3)
+        .map(|i| {
+            let target = center + FxVec2::new(Fx::from_ratio(1, 2), Fx::from_int(i as i32 - 1));
+            Command { player: PlayerId(i as u32), kind: CommandKind::MoveAvatar { agent: agents[i], intent: Intent::GoTo { target, run: false } } }
+        })
+        .collect();
+    sim.step(&go);
+    for _ in 0..120 {
+        sim.step(&[]);
+    }
+    sim.step(&(0..3).map(|i| Command { player: PlayerId(i as u32), kind: CommandKind::Board { agent: agents[i] } }).collect::<Vec<_>>());
+    let s = sim.world().settlement().unwrap();
+    let seats: Vec<_> = agents.iter().map(|&a| s.seat(a as usize)).collect();
+    assert_eq!(seats[0], Some(Seat::Vehicle(0)), "the pilot");
+    assert!(seats[1..].iter().all(|seat| seat.and_then(|s| s.place()).is_some()), "two riders: {seats:?}");
+    sim.step(&[Command { player: PlayerId(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, Fx::ONE), run: false } } }]);
+    for _ in 0..90 {
+        sim.step(&[]);
+    }
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    let s = loaded.settlement().unwrap();
+    assert_eq!(agents.iter().map(|&a| s.seat(a as usize)).collect::<Vec<_>>(), seats, "everyone in their place");
+    assert_eq!(s.vehicles, sim.world().settlement().unwrap().vehicles);
+    assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
+    let mut resumed = Simulation::from_world(loaded, 1);
+    for _ in 0..90 {
+        assert_eq!(sim.step(&[]), resumed.step(&[]));
+    }
+}

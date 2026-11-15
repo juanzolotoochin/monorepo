@@ -21,6 +21,7 @@ pub mod buildings;
 pub mod chase;
 pub mod clock;
 pub mod combat;
+pub mod crawler;
 pub mod fire;
 mod economy;
 mod follow;
@@ -285,6 +286,12 @@ pub struct Settlement {
     /// recomputed when they change (`Settlement::refresh_light`).
     #[serde(skip)]
     pub light: light::LightGrid,
+    /// The crawlers' feet that came down in this tick's stage 2 (CR.5 of
+    /// the crawler), by vehicle and leg, for stage 3 to look under
+    /// (`read_footfalls`). Emptied in housekeeping, so never there between
+    /// ticks: neither saved nor hashed.
+    #[serde(skip)]
+    pub landings: Vec<(VehicleIx, u8)>,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -554,6 +561,7 @@ impl Settlement {
             light: light::LightGrid::default(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
+            landings: Vec::new(),
             spawn: FxVec2::ZERO,
             spawn_height: Fx::ZERO,
             pianos: Vec::new(),
@@ -1006,7 +1014,37 @@ impl Settlement {
         }
         self.validate_buildings()?;
         self.validate_chases()?;
+        for v in &self.vehicles {
+            if let Some(c) = &self.characters[v.character as usize].crawler {
+                crawler::check_reach(v, c)?;
+            }
+        }
+        self.validate_seats()
+    }
+
+    /// Every vehicle seat holds one elder at most, and a rider sits on a
+    /// crawler's deck, in one of its places (CR.4).
+    fn validate_seats(&self) -> Result<(), String> {
+        let mut taken = std::collections::BTreeSet::new();
+        for (i, seat) in self.agents.iter().enumerate().filter_map(|(i, a)| Some((i, a.avatar()?.seat?))) {
+            let Some(ix) = seat.aboard() else { continue };
+            let v = self.vehicles.get(ix as usize).ok_or_else(|| format!("agent {i} aboard a missing vehicle {ix}"))?;
+            if let Some(place) = seat.place() {
+                if self.characters[v.character as usize].crawler.is_none() || place as usize >= crawler::RIDERS.len() {
+                    return Err(format!("agent {i} rides vehicle {ix} in no place {place}"));
+                }
+            }
+            if !taken.insert((ix, seat.place())) {
+                return Err(format!("agent {i} shares a seat on vehicle {ix}"));
+            }
+        }
         Ok(())
+    }
+
+    /// Every crawler's planted feet stand on floors of `terrain`: the part
+    /// of `validate` that needs the ground.
+    pub fn validate_footholds(&self, terrain: &Terrain) -> Result<(), String> {
+        self.vehicles.iter().filter(|v| v.legs.is_some()).try_for_each(|v| crawler::check_floors(v, terrain))
     }
 
     /// What `holder` should hold reserved, `(out, in)` per item, recomputed
@@ -1245,6 +1283,10 @@ mod scene_tests;
 mod seat_tests;
 #[cfg(test)]
 mod tunnel_lab_tests;
+#[cfg(test)]
+mod crawler_lab_tests;
+#[cfg(test)]
+mod crawler_feet_tests;
 #[cfg(test)]
 mod town_volume_tests;
 #[cfg(test)]

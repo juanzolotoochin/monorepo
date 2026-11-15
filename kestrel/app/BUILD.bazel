@@ -22,7 +22,7 @@ rust_binary(
     name = "demo",
     srcs = glob(["src/**/*.rs"]),
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
-    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/cutaway.wesl", "shaders/cutaway_prepass.wesl", "shaders/fog_dressing.wesl", "shaders/grass.wesl"] + glob(["vfx/*.ron"]),
+    compile_data = ["//:Cargo.toml", "actors/crawler.ron", "actors/exosuit.ron", "shaders/cutaway.wesl", "shaders/cutaway_prepass.wesl", "shaders/fog_dressing.wesl", "shaders/grass.wesl"] + glob(["vfx/*.ron"]),
     edition = "2021",
     link_deps = select({
         "@platforms//cpu:wasm32": [],
@@ -36,6 +36,7 @@ rust_binary(
         "//kestrel/app/assets:atlantis",
         "//kestrel/app/assets:boulder_lab",
         "//kestrel/app/assets:combat_arena",
+        "//kestrel/app/assets:crawler_lab",
         "//kestrel/app/assets:dig_lab",
         "//kestrel/app/assets:field",
         "//kestrel/app/assets:forest_outpost",
@@ -253,6 +254,19 @@ game_demo(
 filegroup(
     name = "tunnel_lab_demo_video",
     srcs = [":tunnel_lab_demo"],
+    output_group = "video",
+)
+
+game_demo(
+    name = "crawler_lab_demo",
+    game = ":demo",
+    script = "demos/crawler_lab.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "crawler_lab_demo_video",
+    srcs = [":crawler_lab_demo"],
     output_group = "video",
 )
 

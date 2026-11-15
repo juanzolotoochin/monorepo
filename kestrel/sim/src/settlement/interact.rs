@@ -123,7 +123,7 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
     }
     match avatar.seat {
         Some(Seat::Building(building)) => return Some((InteractTarget::Slot(building), Interaction::Leave { building })),
-        Some(Seat::Vehicle(_)) => return None,
+        Some(Seat::Vehicle(_) | Seat::Rider { .. }) => return None,
         None => {}
     }
     let from = me.body.position;

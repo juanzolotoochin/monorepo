@@ -7,6 +7,7 @@ mod character;
 mod character_catalog;
 mod clock_hud;
 mod combat;
+mod crawler;
 mod cutaway;
 mod sight;
 mod walker_view;

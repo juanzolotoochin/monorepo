@@ -15,11 +15,15 @@
 //!
 //! Driving is an arcade model in `Fx`: the stick is a direction on the
 //! ground, the vehicle turns toward it (or backs toward it, when it points
-//! behind) and speeds up toward the throttle. Four wheels sample the ground;
-//! a wheel rolls up a step no higher than `climb` and over any drop, and the
-//! chassis rides on their mean height, rising at `lift` and falling under
-//! `gravity`. Discs, rock columns and the arena edge block it like an
-//! avatar's body.
+//! behind) and speeds up toward the throttle. Four wheels sample the ground
+//! (in a volume, the floor each rolls on: `ground_under`); a wheel rolls up
+//! a step no higher than `climb` and over any drop, and the chassis rides on
+//! their mean height, rising at `lift` and falling under `gravity`. Discs,
+//! rock columns and the arena edge block it like an avatar's body.
+//!
+//! The crawler (`kestrel/CRAWLER.md`) is a vehicle too, driven the same
+//! way, but it walks on four feet instead of rolling (`crawler`): its
+//! `legs` are set, and its `wheels` are its feet's floors.
 
 use content::character::{CharacterDef, CharacterIx, VehicleDef};
 use fx::{Fx, FxVec2};
@@ -27,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use super::action::Action;
 use super::avatar::{AvatarState, BundleRefusal, Intent, Seat};
+use super::crawler::{self, Legs, Pose, Standing};
 use super::interact::{self, INTERACT_REACH};
 use super::{AgentIx, AgentState, BuildingIx, Event, Occupant, Role, Settlement, Slot};
 use crate::messages::Board;
@@ -38,9 +43,9 @@ pub type VehicleIx = u16;
 /// How far beyond touching a player can be to climb in, in meters.
 const BOARD_REACH: Fx = Fx::from_ratio(4, 5);
 /// A stick pointing further than this from the heading backs up (120°).
-const REVERSE_ANGLE: Fx = Fx::from_ratio(20_944, 10_000);
+pub(super) const REVERSE_ANGLE: Fx = Fx::from_ratio(20_944, 10_000);
 /// The longest stretch of a move checked at once, in meters.
-const SUBSTEP: Fx = Fx::from_ratio(1, 10);
+pub(super) const SUBSTEP: Fx = Fx::from_ratio(1, 10);
 /// A rock column blocks like the disc around it (as in `Terrain::clear`).
 const ROCK_RADIUS: Fx = Fx::from_ratio(71, 100);
 
@@ -62,6 +67,8 @@ pub struct VehicleState {
     pub wheels: [Fx; 4],
     /// What its driver asks for. Zero without a driver.
     pub control: Control,
+    /// A crawler's feet and gait (format 47); `None` for a rover.
+    pub legs: Option<Legs>,
 }
 
 /// A driver's controls: a direction on the ground (length 0 to 1) and
@@ -72,23 +79,42 @@ pub struct Control {
     pub boost: bool,
 }
 
-fn tuning(def: &CharacterDef) -> &VehicleDef {
+pub(super) fn tuning(def: &CharacterDef) -> &VehicleDef {
     def.vehicle.as_ref().expect("vehicle characters have vehicle tuning")
 }
 
 impl VehicleState {
     /// A parked vehicle at `position`, settled on the ground. `None` where
     /// a wheel would be over a drop or outside the arena.
+    /// A crawler stands with its feet at rest (`crawler::park`).
     pub fn new(character: CharacterIx, def: &CharacterDef, position: FxVec2, heading: Fx, terrain: &Terrain) -> Option<VehicleState> {
-        let wheels = ground_under(terrain, wheel_points(position, heading, tuning(def)))?;
-        let height = mean(wheels);
-        Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default() })
+        let (wheels, height, legs) = match &def.crawler {
+            Some(c) => {
+                let (legs, height) = crawler::park(Pose { position, heading }, c, terrain)?;
+                (std::array::from_fn(|i| legs.feet[i].floor), height, Some(legs))
+            }
+            None => {
+                let wheels = ground_under(terrain, wheel_points(position, heading, tuning(def)), None)?;
+                (wheels, mean(wheels), None)
+            }
+        };
+        Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default(), legs })
     }
 
     /// Where the driver sits: on the vehicle, facing its way, `seat` above
     /// the chassis base.
     pub fn seat(&self, def: &CharacterDef) -> (FxVec2, Fx) {
         (self.position, self.height + tuning(def).seat)
+    }
+
+    /// Where the driver (`None`) or the rider in `place` sits: a rider on
+    /// a crawler's deck at `crawler::RIDERS`, as high as the driver.
+    pub fn seat_at(&self, def: &CharacterDef, place: Option<u8>) -> (FxVec2, Fx) {
+        let (position, height) = self.seat(def);
+        match place {
+            Some(place) => (Pose::of(self).at(crawler::RIDERS[place as usize]), height),
+            None => (position, height),
+        }
     }
 
     /// Meters per second along the ground.
@@ -105,13 +131,22 @@ pub fn wheel_points(position: FxVec2, heading: Fx, vehicle: &VehicleDef) -> [FxV
     [position + ahead - side, position + ahead + side, position - ahead - side, position - ahead + side]
 }
 
-fn ground_under(terrain: &Terrain, points: [FxVec2; 4]) -> Option<[Fx; 4]> {
+/// The ground under each wheel. In a volume scene, given the wheels'
+/// ground before (`from`), each reads the floor it rolls on
+/// (`Terrain::floor`): the highest no more than `climb` and a layer over
+/// its last, so a wheel stays on its floor over a tunnel or a cave, and a
+/// wall too high to climb is its top or none (both refused by
+/// `rollable`). Elsewhere, and when parked, the top of the ground.
+fn ground_under(terrain: &Terrain, points: [FxVec2; 4], from: Option<([Fx; 4], Fx)>) -> Option<[Fx; 4]> {
     let mut ground = [Fx::ZERO; 4];
-    for (g, p) in ground.iter_mut().zip(points) {
+    for (i, (g, p)) in ground.iter_mut().zip(points).enumerate() {
         if !terrain.inside(p) {
             return None;
         }
-        *g = terrain.ground(p)?;
+        *g = match from {
+            Some((wheels, climb)) if terrain.volume.is_some() => terrain.floor(p, wheels[i] + climb)?,
+            _ => terrain.ground(p)?,
+        };
     }
     Some(ground)
 }
@@ -126,13 +161,13 @@ fn rollable(from: [Fx; 4], to: [Fx; 4], climb: Fx) -> bool {
     from.iter().zip(&to).all(|(&a, &b)| b - a <= climb)
 }
 
-fn approach(current: Fx, target: Fx, max_change: Fx) -> Fx {
+pub(super) fn approach(current: Fx, target: Fx, max_change: Fx) -> Fx {
     current + (target - current).clamp(-max_change, max_change)
 }
 
 /// Pushes a body of `radius` at `p` out of the terrain's discs and rock
 /// columns, three passes, and keeps it in the arena.
-fn push_out(terrain: &Terrain, mut p: FxVec2, radius: Fx) -> FxVec2 {
+pub(super) fn push_out(terrain: &Terrain, mut p: FxVec2, radius: Fx) -> FxVec2 {
     let (min, max) = (terrain.min(), terrain.max());
     let extra = Fx::from_ratio(1, 50);
     let rock = |p: FxVec2| {
@@ -186,13 +221,25 @@ pub(super) fn drive(vehicle: &mut VehicleState, action: &Action) -> bool {
     }
 }
 
-/// Stage 2 for one vehicle: turn and speed toward its controls, then roll
-/// over the ground.
+/// Stage 2 for one vehicle with nobody standing round it: see
+/// `self_update_among`.
+#[cfg(test)]
 pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef) {
+    self_update_among(v, terrain, def, &[]);
+}
+
+/// Stage 2 for one vehicle: turn and speed toward its controls, then roll
+/// over the ground. A crawler walks instead (`crawler::self_update`), its
+/// feet clear of `bodies`. Returns which of a crawler's feet came down
+/// this tick (none for a rover).
+pub(super) fn self_update_among(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef, bodies: &[Standing]) -> [bool; 4] {
+    if v.legs.is_some() {
+        return crawler::self_update(v, terrain, def, bodies);
+    }
     let vd = tuning(def);
     let radius = def.body.radius;
     // The ground under it may have been dug since.
-    if let Some(wheels) = ground_under(terrain, wheel_points(v.position, v.heading, vd)) {
+    if let Some(wheels) = ground_under(terrain, wheel_points(v.position, v.heading, vd), Some((v.wheels, vd.climb))) {
         v.wheels = wheels;
     }
     let top = if v.control.boost { def.movement.run } else { def.movement.walk }.div_int(content::TICKS_PER_SECOND as i64);
@@ -224,7 +271,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     if rate > Fx::ZERO && turn != Fx::ZERO {
         let heading = v.heading + turn.clamp(-rate, rate);
         // A turn that would swing a wheel up a cliff or over the edge doesn't happen.
-        if let Some(wheels) = ground_under(terrain, wheel_points(v.position, heading, vd)).filter(|&w| rollable(v.wheels, w, vd.climb)) {
+        if let Some(wheels) = ground_under(terrain, wheel_points(v.position, heading, vd), Some((v.wheels, vd.climb))).filter(|&w| rollable(v.wheels, w, vd.climb)) {
             v.heading = heading;
             v.wheels = wheels;
         }
@@ -235,7 +282,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     let steps = (delta.length() / SUBSTEP).ceil().floor_to_int().max(1);
     for _ in 0..steps {
         let candidate = push_out(terrain, v.position + delta.div_int(steps), radius);
-        match ground_under(terrain, wheel_points(candidate, v.heading, vd)).filter(|&w| rollable(v.wheels, w, vd.climb)) {
+        match ground_under(terrain, wheel_points(candidate, v.heading, vd), Some((v.wheels, vd.climb))).filter(|&w| rollable(v.wheels, w, vd.climb)) {
             Some(wheels) => {
                 v.position = candidate;
                 v.wheels = wheels;
@@ -260,14 +307,31 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
         v.fall = Fx::ZERO;
         v.height = (v.height + vd.lift).min(rest);
     }
+    [false; 4]
 }
 
 impl Settlement {
-    /// Stage 2: every vehicle drives itself. Each writes only itself.
-    pub(super) fn vehicles_self_update(&mut self, terrain: &Terrain) {
+    /// Stage 2: every vehicle drives itself. Each writes only itself; a
+    /// crawler's feet keep clear of `bodies`, as they stood last tick. The
+    /// feet that came down are kept for stage 3 (`Settlement::landings`).
+    pub(super) fn vehicles_self_update(&mut self, terrain: &Terrain, bodies: &[Standing]) {
         use rayon::prelude::*;
         let characters = &self.characters;
-        self.vehicles.par_iter_mut().for_each(|v| self_update(v, terrain, &characters[v.character as usize]));
+        let landed: Vec<[bool; 4]> = self.vehicles.par_iter_mut().map(|v| self_update_among(v, terrain, &characters[v.character as usize], bodies)).collect();
+        self.landings = landed
+            .iter()
+            .enumerate()
+            .flat_map(|(ix, feet)| (0..4u8).filter(move |&leg| feet[leg as usize]).map(move |leg| (ix as VehicleIx, leg)))
+            .collect();
+    }
+
+    /// The bodies a crawler's feet keep clear of, if there is a crawler.
+    pub(super) fn standing_for_crawlers(&self) -> Vec<Standing> {
+        if self.vehicles.iter().any(|v| v.legs.is_some()) {
+            crawler::standing(&self.agents)
+        } else {
+            Vec::new()
+        }
     }
 
     /// The vehicle `agent` drives, if it drives one.
@@ -286,12 +350,35 @@ impl Settlement {
         self.agents.iter().position(|a| a.avatar().is_some_and(|p| p.seat == Some(Seat::Vehicle(vehicle))))
     }
 
+    /// The agent riding vehicle `vehicle` in `place`, if anyone is.
+    pub fn rider_of(&self, vehicle: VehicleIx, place: u8) -> Option<usize> {
+        self.agents.iter().position(|a| a.avatar().is_some_and(|p| p.seat == Some(Seat::Rider { vehicle, place })))
+    }
+
+    /// The free seat of vehicle `ix` for an elder at `from`: the driver's
+    /// first, then, on a crawler, the nearest free rider's place on the
+    /// deck (the lower place on a tie). `None` when every seat is taken.
+    fn free_seat(&self, ix: VehicleIx, from: FxVec2) -> Option<Seat> {
+        if self.driver_of(ix).is_none() {
+            return Some(Seat::Vehicle(ix));
+        }
+        let v = &self.vehicles[ix as usize];
+        self.characters[v.character as usize].crawler.as_ref()?;
+        (0..crawler::RIDERS.len() as u8)
+            .filter(|&place| self.rider_of(ix, place).is_none())
+            .min_by_key(|&place| ((Pose::of(v).at(crawler::RIDERS[place as usize]) - from).length_squared(), place))
+            .map(|place| Seat::Rider { vehicle: ix, place })
+    }
+
     /// Stage 5: players climb into the nearest free seat in reach, in
     /// command order (players in order, `World::apply_commands`), so the
     /// first to reach for a seat gets it.
     ///
     /// - A vehicle is in reach within `BOARD_REACH` of touching it and free
-    ///   while nobody drives it, as it always was.
+    ///   while nobody drives it, as it always was. A crawler (CR.4) is in
+    ///   reach within `BOARD_REACH` of touching its body's box, and free
+    ///   while any of its four seats is: the cab first, then the nearest
+    ///   free place on the deck (`free_seat`).
     /// - A building (D3) is in reach while its slot spot is within the
     ///   interact reach, so the boarding key and interact (which names the
     ///   building, `building`) reach the same. Only a built one counts; it
@@ -318,15 +405,18 @@ impl Settlement {
             let (position, radius) = (a.body.position, a.radius());
             let vehicle = (0..self.vehicles.len())
                 .filter(|_| wanted.is_none())
-                .filter(|&ix| self.driver_of(ix as VehicleIx).is_none())
-                .map(|ix| {
+                .filter_map(|ix| Some((ix, self.free_seat(ix as VehicleIx, position)?)))
+                .map(|(ix, seat)| {
                     let v = &self.vehicles[ix];
-                    let reach = self.characters[v.character as usize].body.radius + radius + BOARD_REACH;
-                    ((v.position - position).length_squared(), reach, ix)
+                    let def = &self.characters[v.character as usize];
+                    match &def.crawler {
+                        Some(c) => (crawler::box_distance_squared(Pose::of(v), c, position), radius + BOARD_REACH, (ix, seat)),
+                        None => ((v.position - position).length_squared(), def.body.radius + radius + BOARD_REACH, (ix, seat)),
+                    }
                 })
                 .filter(|&(d2, reach, _)| d2 <= reach * reach)
-                .min_by_key(|&(d2, _, ix)| (d2, ix))
-                .map(|(d2, _, ix)| (d2, ix));
+                .min_by_key(|&(d2, _, (ix, _))| (d2, ix))
+                .map(|(d2, _, seat)| (d2, seat));
             // Built buildings in reach, nearest first, with why each can't
             // be boarded, if it can't.
             let mut buildings: Vec<(Fx, BuildingIx, Option<BundleRefusal>)> = (0..self.buildings.len() as BuildingIx)
@@ -342,8 +432,8 @@ impl Settlement {
             buildings.sort_by_key(|&(d2, b, _)| (d2, b));
             let building = buildings.iter().find(|(_, _, refusal)| refusal.is_none()).map(|&(d2, b, _)| (d2, b));
             match (vehicle, building) {
-                (Some((dv, ix)), Some((db, _))) if dv <= db => self.drive_off(agent, ix),
-                (Some((_, ix)), None) => self.drive_off(agent, ix),
+                (Some((dv, (ix, seat))), Some((db, _))) if dv <= db => self.drive_off(agent, ix, seat),
+                (Some((_, (ix, seat))), None) => self.drive_off(agent, ix, seat),
                 (_, Some((_, b))) => self.possess(agent, b, terrain),
                 (None, None) => {
                     let reason = match buildings.first() {
@@ -359,12 +449,15 @@ impl Settlement {
         }
     }
 
-    /// Seats `agent` in vehicle `ix`, stopping what it was doing.
-    fn drive_off(&mut self, agent: usize, ix: usize) {
+    /// Seats `agent` in vehicle `ix`'s `seat`, stopping what it was doing.
+    /// A new driver takes the controls at rest.
+    fn drive_off(&mut self, agent: usize, ix: usize, seat: Seat) {
         let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return };
-        avatar.seat = Some(Seat::Vehicle(ix as VehicleIx));
+        avatar.seat = Some(seat);
         sit_down(body, avatar);
-        self.vehicles[ix].control = Control::default();
+        if seat.vehicle().is_some() {
+            self.vehicles[ix].control = Control::default();
+        }
     }
 
     /// Seats `agent` in building `b`'s slot (D3), stopping what it was
@@ -395,7 +488,7 @@ impl Settlement {
         sit_down(body, avatar);
     }
 
-    /// Housekeeping: drivers sit in their seats, and a vehicle nobody
+    /// Housekeeping: drivers and riders sit in their seats, and a vehicle nobody
     /// drives lets go of its controls. An elder possessing a building
     /// stands at its slot spot, facing it; a building whose elder no longer
     /// sits there (it left, died or respawned, `avatar::act`) empties its
@@ -407,8 +500,12 @@ impl Settlement {
             match avatar.seat {
                 Some(Seat::Vehicle(ix)) => {
                     let v = &self.vehicles[ix as usize];
-                    seat(body, avatar, v, &self.characters[v.character as usize]);
+                    seat(body, avatar, v, &self.characters[v.character as usize], None);
                     driven[ix as usize] = true;
+                }
+                Some(Seat::Rider { vehicle: ix, place }) => {
+                    let v = &self.vehicles[ix as usize];
+                    seat(body, avatar, v, &self.characters[v.character as usize], Some(place));
                 }
                 Some(Seat::Building(b)) => {
                     let building = &self.buildings[b as usize];
@@ -453,9 +550,10 @@ fn sit_down(body: &mut super::Body, avatar: &mut AvatarState) {
     body.push = FxVec2::ZERO;
 }
 
-/// Puts a driver in the vehicle's seat, facing its way.
-pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &VehicleState, def: &CharacterDef) {
-    let (position, height) = v.seat(def);
+/// Puts a driver (`place` `None`) or a rider in their seat on the vehicle,
+/// facing its way.
+pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &VehicleState, def: &CharacterDef, place: Option<u8>) {
+    let (position, height) = v.seat_at(def, place);
     body.position = position;
     body.heading = v.heading;
     body.velocity = FxVec2::ZERO;
@@ -466,8 +564,12 @@ pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &Vehicle
 
 /// Where a driver climbing out stands: beside the vehicle (left, right,
 /// behind, then in front), on ground it could walk to from the seat's
-/// level. `None` when every side is blocked.
-pub(super) fn exit_spot(v: &VehicleState, def: &CharacterDef, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+/// level. `None` when every side is blocked. A crawler's driver or rider
+/// (in `place`) climbs down beside its body's box (`crawler::exit_spot`).
+pub(super) fn exit_spot(v: &VehicleState, def: &CharacterDef, place: Option<u8>, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+    if let Some(c) = &def.crawler {
+        return crawler::exit_spot(v, c, place, radius, terrain);
+    }
     let forward = heading_vector(v.heading);
     let right = FxVec2::new(forward.y, -forward.x);
     let gap = def.body.radius + radius + Fx::from_ratio(3, 20);

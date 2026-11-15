@@ -117,7 +117,7 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
 /// plans its way to its wave's `target` again from where it stands, when
 /// its backoff allows.
 #[allow(clippy::too_many_arguments)]
-fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, light: &super::light::LightGrid, quarry: Option<(FxVec2, Fx)>, stop: Fx, target: Option<FxVec2>) -> Fx {
+fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, light: &super::light::LightGrid, quarry: Option<(FxVec2, Fx)>, stop: Fx, target: Option<FxVec2>, crawler_feet: &[(FxVec2, Fx)]) -> Fx {
     let previous = t.position;
     let recoiling = tick < t.stagger_until;
     let mut knocked = Fx::ZERO;
@@ -136,11 +136,12 @@ fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: 
     } else {
         let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
         match quarry {
-            Some((to, feet)) => super::chase::chase_at(t, to, feet, stop, speed * wounded, tick, terrain, light),
+            Some((to, feet)) => super::chase::chase_at(t, to, feet, stop, speed * wounded, tick, terrain, light, crawler_feet),
             None => {
                 let walked = super::chase::walk_route_at(&mut t.position, &mut t.height, &mut t.route, speed * wounded, terrain);
                 if let Some(target) = target.filter(|_| !walked && t.backoff.due(tick)) {
-                    let (route, reaches) = super::chase::route_home_at(terrain, light, t.position, t.height, target);
+                    let round = super::crawler::feet_in_the_way(crawler_feet, terrain, t.position, t.height, super::chase::WALK_CLEARANCE);
+                    let (route, reaches) = super::chase::route_home_at(terrain, light, t.position, t.height, target, &round);
                     t.backoff.planned(tick, reaches, 0);
                     if !route.is_empty() {
                         t.route = route;
@@ -413,6 +414,8 @@ pub enum Impact {
     BoltPierce,
     /// A fireball's landing or a burn (`fire`).
     Fire,
+    /// A crawler's foot coming down on it (CR.5 of the crawler).
+    Stomp,
 }
 
 /// What happened this tick, for sounds and effects. Not part of the state.
@@ -488,6 +491,10 @@ pub enum Event {
     SpriteReturned { agent: AgentIx },
     /// The Sacred Tree's health reached 0: the run is over (B7).
     TreeFell,
+    /// Crawler `vehicle`'s foot `leg` came down at `position` on `floor`
+    /// (CR.5 of the crawler), shoving `shoved` bodies off its spot and
+    /// stomping `stomped` threats (each also a `Hit` with `Impact::Stomp`).
+    Footfall { vehicle: super::VehicleIx, leg: u8, position: FxVec2, floor: Fx, shoved: u8, stomped: u8 },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`
@@ -680,7 +687,7 @@ impl Settlement {
         self.threats.binary_search_by_key(&id, |t| t.id).ok().map(|i| &self.threats[i])
     }
 
-    fn threat_index(&self, id: u64) -> Option<usize> {
+    pub(super) fn threat_index(&self, id: u64) -> Option<usize> {
         self.threats.binary_search_by_key(&id, |t| t.id).ok()
     }
 
@@ -708,6 +715,8 @@ impl Settlement {
             .collect();
         let (agents, buildings, kinds, waves, light) = (&self.agents, &self.buildings, &self.building_kinds, &self.waves, &self.light);
         let volume = terrain.volume.is_some();
+        // Where the crawlers' feet stood last tick: plans go round them (CR.5).
+        let crawler_feet = super::crawler::footings(&self.vehicles);
         let knockback_moved: Fx = self
             .threats
             .par_iter_mut()
@@ -725,7 +734,7 @@ impl Settlement {
                 if volume {
                     let (quarry, stop) = quarry.map_or((None, stop), |(at, feet, stop)| (Some((at, feet)), stop));
                     let target = waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied());
-                    return follow_route_at(t, speed, full_hp, tick, terrain, light, quarry, stop, target);
+                    return follow_route_at(t, speed, full_hp, tick, terrain, light, quarry, stop, target, &crawler_feet);
                 }
                 let (quarry, stop) = quarry.map_or((None, stop), |(at, _, stop)| (Some(at), stop));
                 follow_route(t, speed, full_hp, tick, terrain, quarry, stop)
@@ -1465,7 +1474,7 @@ impl Settlement {
         if self.waves[w].route.is_none() {
             let wave = &self.waves[w];
             let (route, _) = if terrain.volume.is_some() {
-                super::chase::route_home_at(terrain, &self.light, wave.position, feet, wave.target)
+                super::chase::route_home_at(terrain, &self.light, wave.position, feet, wave.target, &[])
             } else {
                 nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE)
             };

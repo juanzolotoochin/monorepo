@@ -435,6 +435,33 @@ impl StateHash for Board {
     }
 }
 
+/// A crawler's foot came down this tick (CR.5 of the crawler, C10): stage
+/// 3 lists the bodies under it, and stage 5 shoves the agents off its spot
+/// and stomps the threats (`Settlement::foot_lands`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FootLands {
+    pub vehicle: u16,
+    pub leg: u8,
+    /// Where it stands now, and its floor.
+    pub spot: FxVec2,
+    pub floor: Fx,
+    /// Agents standing under it (not seated), by index, ascending.
+    pub agents: Vec<u16>,
+    /// Threats under it, by ID, ascending.
+    pub threats: Vec<u64>,
+}
+
+impl StateHash for FootLands {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.vehicle);
+        h.write_u64(self.leg as u64);
+        h.write(&self.spot);
+        h.write(&self.floor);
+        h.write(&self.agents);
+        h.write(&self.threats);
+    }
+}
+
 /// A bundle action that couldn't start (`Action::Bundle`), and why: stage 5
 /// reports it as `Event::BundleRefused`, for the view to explain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -898,4 +925,8 @@ message_queues! {
     // Threats that turn on a quarry or give up on one (`chase`), after the
     // shots, so a threat killed this tick changes nothing.
     threat_goal: ThreatGoal,
+    // Crawlers' feet coming down (CR.5 of the crawler). Declared last, so
+    // they hash last and only when there are any; stage 5 applies them
+    // after the threats' swings.
+    foot_lands: FootLands,
 }

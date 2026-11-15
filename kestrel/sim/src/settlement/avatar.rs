@@ -221,14 +221,33 @@ pub enum Seat {
     Vehicle(super::VehicleIx),
     /// Possessing a building, as its slot's `Occupant::Elder`.
     Building(super::BuildingIx),
+    /// Riding a crawler's deck (CR.4 of the crawler, format 48): `place`
+    /// indexes `crawler::RIDERS`. A rider can't steer.
+    Rider { vehicle: super::VehicleIx, place: u8 },
 }
 
 impl Seat {
-    /// The vehicle, if it is a vehicle's seat.
+    /// The vehicle, if it is a vehicle's driver's seat.
     pub fn vehicle(self) -> Option<super::VehicleIx> {
         match self {
             Seat::Vehicle(ix) => Some(ix),
+            Seat::Building(_) | Seat::Rider { .. } => None,
+        }
+    }
+
+    /// The vehicle it is aboard, driving or riding.
+    pub fn aboard(self) -> Option<super::VehicleIx> {
+        match self {
+            Seat::Vehicle(ix) | Seat::Rider { vehicle: ix, .. } => Some(ix),
             Seat::Building(_) => None,
+        }
+    }
+
+    /// The rider's place on the deck, if it is a rider's seat.
+    pub fn place(self) -> Option<u8> {
+        match self {
+            Seat::Rider { place, .. } => Some(place),
+            Seat::Vehicle(_) | Seat::Building(_) => None,
         }
     }
 
@@ -236,7 +255,7 @@ impl Seat {
     pub fn building(self) -> Option<super::BuildingIx> {
         match self {
             Seat::Building(b) => Some(b),
-            Seat::Vehicle(_) => None,
+            Seat::Vehicle(_) | Seat::Rider { .. } => None,
         }
     }
 }
@@ -894,14 +913,16 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // doesn't stop a dig, keep a released route or end on a cancel.
     let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
     match avatar.seat {
-        Some(Seat::Vehicle(ix)) => {
+        Some(seat @ (Seat::Vehicle(_) | Seat::Rider { .. })) => {
             // Sitting in a vehicle, a player can look around, climb out,
-            // let go or respawn; movement went to the vehicle (`vehicle::drive`).
+            // let go or respawn; a driver's movement went to the vehicle
+            // (`vehicle::drive`), and a rider's does nothing.
+            let ix = seat.aboard().expect("aboard a vehicle");
             match *action {
                 Action::Board => {
                     let v = &view.vehicles[ix as usize];
                     let vehicle_def = &view.characters[v.character as usize];
-                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
+                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, seat.place(), def.body.radius, view.terrain) {
                         avatar.seat = None;
                         body.position = position;
                         avatar.height = ground;
@@ -984,7 +1005,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // Moving lets go of a pile haul, dead or alive.
             drop_haul(avatar, view, out);
             if body.alive() {
-                set_intent(body, avatar, intent.clone(), view.terrain, def);
+                set_intent(body, avatar, intent.clone(), view.terrain, view.vehicles, def);
             }
         }
         // A planned route is a hauler's; no command sends one.
@@ -1064,7 +1085,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                         // there; the units move once it is in reach.
                         if let (Some(at), Some(spot)) = (at, spot) {
                             if distance(body.position, at) > DOCK_REACH {
-                                set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, def);
+                                set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, view.vehicles, def);
                             }
                         }
                     }
@@ -1315,8 +1336,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
 }
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its
-/// route.
-fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain: &Terrain, def: &CharacterDef) {
+/// route, round the crawlers' feet among `vehicles` (CR.5).
+fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain: &Terrain, vehicles: &[super::VehicleState], def: &CharacterDef) {
     // Walking off stops a dig.
     let walking = match intent {
         Intent::Stop => false,
@@ -1339,11 +1360,16 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
         // so it comes down on the target's floor, not on the mountain over
         // a tunnel; with no path on foot, straight there as elsewhere.
         let floor = if flying { terrain.footprint_at(body.position, avatar.height, radius).unwrap_or(avatar.flight.support) } else { avatar.height };
-        let path = || nav::path_at(terrain, body.position, floor, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        // On foot it goes round the crawlers' planted feet (CR.5); flying
+        // over them, it needn't. A foot on the target itself doesn't keep
+        // it from walking there: it waits beside it, or the foot lifts.
+        let mut feet = if flying { Vec::new() } else { super::crawler::feet_in_the_way(&super::crawler::footings(vehicles), terrain, body.position, floor, radius) };
+        feet.retain(|d| distance(d.center, target) >= d.radius + radius);
+        let path = || nav::path_at(terrain, body.position, floor, target, None, radius, &feet).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
         body.route = match terrain.volume {
             Some(_) if !flying => path(),
             Some(_) => Some(path()).filter(|route| !route.is_empty()).unwrap_or_else(|| nav::path_with(terrain, body.position, target, radius, &[], &walkable)),
-            None => nav::path_with(terrain, body.position, target, radius, &[], &walkable),
+            None => nav::path_with(terrain, body.position, target, radius, &feet, &walkable),
         };
         avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {

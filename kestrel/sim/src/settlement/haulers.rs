@@ -640,6 +640,12 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
             }
         }
     }
+    // A crawler's feet are in the way as bodies are (CR.5): a walker meeting
+    // one detours round it. Its body is overhead.
+    if !ctx.view.vehicles.is_empty() {
+        let footings = super::crawler::footings(ctx.view.vehicles);
+        nearby.extend(super::crawler::feet_in_the_way(&footings, ctx.terrain, body.position, feet, radius).into_iter().filter(|d| distance(body.position, d.center) < near));
+    }
     let dynamic = nearby.len();
     let gap = Fx::from_ratio(2, 25); // 0.08
     let epsilon = Fx::from_bits(42_950); // 0.00001

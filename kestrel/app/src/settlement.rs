@@ -2347,12 +2347,13 @@ pub fn snapshot(world: &World) -> serde_json::Value {
             });
             out["burst"] = burst.unwrap_or(serde_json::Value::Null);
         }
-        // The local player's seat: a vehicle it drives or a building it
-        // possesses, by index, or null.
+        // The local player's seat: a vehicle it drives or rides (with the
+        // rider's place) or a building it possesses, by index, or null.
         let service = world.get_resource::<crate::lockstep::SessionService>();
         let seat = service.and_then(|service| service.settlement()?.seat(service.player()? as usize));
         out["seat"] = match seat {
             Some(sim::settlement::Seat::Vehicle(v)) => serde_json::json!({"vehicle": v}),
+            Some(sim::settlement::Seat::Rider { vehicle, place }) => serde_json::json!({"vehicle": vehicle, "rider": place}),
             Some(sim::settlement::Seat::Building(b)) => serde_json::json!({"building": b}),
             None => serde_json::Value::Null,
         };
