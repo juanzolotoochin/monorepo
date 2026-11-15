@@ -13,6 +13,9 @@ exports_files(
         "levels/tunnel_lab.ron",
         # The sim's and assetc's Climbing Gym tests read its volume.
         "levels/climbing_gym.ron",
+        # The sim's Crawler Lab tests read its volume, vehicles and supply.
+        "levels/crawler_lab.ron",
+        "levels/crawler_lab_supply.ron",
     ],
     visibility = ["//kestrel:__subpackages__"],
 )
@@ -181,6 +184,17 @@ scene_assets(
     name = "climbing_gym",
     layout = "levels/climbing_gym.ron",
     prefabs = [],
+)
+
+# The crawler prototype's map: a volume with terraces, a 1.5 m step, a
+# trench, a pit, a cliff and a moat, the crawler parked by the spawn and a
+# few chasing ghouls (kestrel/CRAWLER.md, C11).
+scene_assets(
+    name = "crawler_lab",
+    layout = "levels/crawler_lab.ron",
+    prefabs = [],
+    scenario = "levels/crawler_lab_supply.ron",
+    style = "styles/forest.ron",
 )
 
 boulder_prefab(

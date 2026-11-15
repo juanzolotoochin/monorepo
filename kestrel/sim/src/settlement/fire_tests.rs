@@ -124,7 +124,7 @@ fn center(sim: &Simulation) -> FxVec2 {
 /// nothing happened.
 fn thrown(sim: &Simulation) -> Option<Result<FxVec2, BurstRefusal>> {
     settlement(sim).events.iter().find_map(|e| match *e {
-        Event::FireballThrown { agent: ELDER, building: BALLISTA, to, .. } => Some(Ok(to)),
+        Event::FireballThrown { agent: ELDER, mount: super::Mount::Building(BALLISTA), to, .. } => Some(Ok(to)),
         Event::BurstRefused { agent: ELDER, reason } => Some(Err(reason)),
         _ => None,
     })

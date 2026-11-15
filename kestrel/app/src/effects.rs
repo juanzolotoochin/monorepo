@@ -699,6 +699,7 @@ pub fn camera_feedback(
     actions: Res<crate::input::InputService>,
     dispatcher: Option<Res<crate::input::gameplay::Dispatcher>>,
     scene: Option<Res<crate::scene_view::SceneView>>,
+    vehicles: Option<Res<crate::vehicles::Vehicles>>,
     camera: Single<(&mut Transform, &mut Projection, &mut CameraRig), With<Camera>>,
 ) {
     let (mut transform, mut projection, mut rig) = camera.into_inner();
@@ -708,10 +709,12 @@ pub fn camera_feedback(
     let pad = if actions.frame().blocked { 0.0 } else { actions.frame().gameplay.zoom };
     let out = zoom_out(scene.as_deref());
     rig.zoom = (rig.zoom - input.scroll().y * 0.8 + pad).clamp(voxel_assets::ZOOM_IN, out);
+    // Piloting a crawler pulls the view back (CR.3 of the crawler).
+    let pull = vehicles.map_or(1.0, |v| v.pull());
     if let Projection::Orthographic(p) = &mut *projection {
         if let ScalingMode::FixedVertical { viewport_height } = &mut p.scaling_mode {
             *viewport_height +=
-                (rig.zoom - *viewport_height) * (1.0 - (-12.0 * time.delta_secs()).exp());
+                (rig.zoom * pull - *viewport_height) * (1.0 - (-12.0 * time.delta_secs()).exp());
         }
     }
     let t = time.elapsed_secs();

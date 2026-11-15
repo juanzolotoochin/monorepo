@@ -932,6 +932,11 @@ impl World {
             for message in messages.swing_lands {
                 settlement.swing_lands(tick, message, &mut self.terrain);
             }
+            // Crawlers' feet (CR.5): after the threats' swings, before the
+            // breaches, so a ghoul stomped at the corner doesn't breach.
+            for message in messages.foot_lands {
+                settlement.foot_lands(tick, message, &self.terrain);
+            }
             for message in messages.breach {
                 settlement.breach(message);
             }
@@ -941,6 +946,9 @@ impl World {
             for message in messages.building_fire {
                 settlement.building_fire(tick, message);
             }
+            for message in messages.gun_fire {
+                settlement.gun_fire(tick, message, &self.terrain);
+            }
             settlement.burn(tick, &self.terrain);
             settlement.threat_goals(messages.threat_goal, &self.terrain);
             settlement.claim_slots(messages.claim_slot);
@@ -948,6 +956,7 @@ impl World {
             settlement.claim_dig_tiles(messages.claim_dig_tile);
             settlement.sprite_bundles(messages.sprite_bundle, tick, &self.terrain);
             settlement.sprite_installs(messages.sprite_install);
+            settlement.crew_guns(messages.crew_gun, &self.terrain);
         }
         self.apply_repairs();
     }
@@ -970,6 +979,7 @@ impl World {
             settlement.avatar_housekeeping(self.tick);
             settlement.fall_housekeeping(self.tick, &mut self.terrain);
             settlement.seat_housekeeping(&self.terrain);
+            settlement.landings.clear();
             settlement.sprite_housekeeping(self.tick, &self.terrain);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);

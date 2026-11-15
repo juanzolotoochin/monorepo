@@ -268,6 +268,7 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         amber: None,
         danger: &[],
         leader: None,
+        crews: &[],
     };
     haulers::think(a, me, &ctx)
 }

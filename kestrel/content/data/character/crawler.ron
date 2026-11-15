@@ -1,0 +1,55 @@
+// The crawler (kestrel/CRAWLER.md): a brass-and-timber engine on four
+// insect legs, about four elders big. A pilot climbs into its cab with G
+// and drives it with the movement controls; run trots. Its feet step up or
+// down 1.5 m (three layers) and across gaps up to 2 m.
+//
+// It walks on the footholds the simulation picks (sim::settlement::crawler).
+// `vehicle` holds how it speeds up, turns and how fast its body rises or
+// sinks to its feet (`lift`); it leaves out the wheelbase, track, climb and
+// seat, which the `crawler` section sets (twice the hip's offsets, the step
+// and the deck).
+(
+    sim: (
+        brain: Vehicle,
+        // Half its width: what it pushes off and what a pilot reaches to
+        // board it.
+        body: (radius: 1.5),
+        movement: (walk: 1.6, run: 3.2),
+        vehicle: (
+            acceleration: 1.0, braking: 3, reverse: 0.8,
+            // Slow enough that turning in place keeps the feet within 2 m
+            // of rest between steps.
+            turn: 20,
+            lift: 2.5, gravity: 9.8,
+        ),
+        crawler: (
+            // 6 m long and 3 m wide, its deck 3 m over its feet (C2).
+            length: 6.0, width: 3.0, deck: 3.0,
+            // The front right leg; the others mirror it. A foot rests
+            // 1.1 m out from the body's side, a little ahead of its hip.
+            hip: (along: 2.4, across: 1.2),
+            stance: (along: 3.0, across: 2.6),
+            reach: 4.5, step: 1.5, gap: 2.0,
+            // A wave walk, one leg at a time with three down (2.4 s a
+            // round), and a diagonal trot on boost (1 s a round) (C7).
+            walk: (cycle: 144, swing: 33, lift: 0.9),
+            trot: (cycle: 60, swing: 27, lift: 0.6),
+            // The gun (kestrel/CRAWLER_TURRET.md, T1, T7): on the cab's
+            // roof (the rig's cab covers 0.8 to 2.3 m ahead of the middle
+            // and stands 1.3 m over the deck), swivelling all round. Bolts
+            // leave from its bow, half a meter over the roof (the rig's
+            // `gun` stands on the roof with its bow at this height), so
+            // about 4.8 m over its feet. Its numbers are the Sacred
+            // Tree's ballista's (sacred_tree_supply.ron), but for a store
+            // of 20 stones and a 7 m range: a bolt every 0.7 s for 1, and
+            // the possessing gunner's fireball every 25 s.
+            gun: (
+                mount: (along: 1.55, across: 0.0), height: 1.8,
+                defence: (ammo: "stone", ammo_cap: 20, range: 7.0, period: 0.7, damage: 1, projectile_speed: 8.0,
+                    fireball: Some((cooldown: 25.0, speed: 6.0, damage: 1, radius: 1.0, fire_radius: 1.5, fire_seconds: 4.0,
+                        burn_damage: 1, burn_period: 1.5, burn_linger: 1.0))),
+            ),
+        ),
+    ),
+    view: (skin: "crawler"),
+)

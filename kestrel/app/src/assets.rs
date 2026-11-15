@@ -46,6 +46,7 @@ impl SceneLibrary {
             ScenePack::decode(sacred_tree::PACK_BYTES).expect("validated Sacred Tree asset pack"),
             ScenePack::decode(tunnel_lab::PACK_BYTES).expect("validated Tunnel Lab asset pack"),
             ScenePack::decode(climbing_gym::PACK_BYTES).expect("validated Climbing Gym asset pack"),
+            ScenePack::decode(crawler_lab::PACK_BYTES).expect("validated Crawler Lab asset pack"),
         ]
         .into_iter()
         .map(Arc::new)
@@ -407,7 +408,7 @@ mod tests {
         assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
         assert_eq!(
             library.index("missing"),
-            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade, laser-pit, asset-guide, sacred-tree, tunnel-lab, climbing-gym".into())
+            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade, laser-pit, asset-guide, sacred-tree, tunnel-lab, climbing-gym, crawler-lab".into())
         );
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));

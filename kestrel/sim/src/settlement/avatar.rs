@@ -21,7 +21,7 @@ use super::action::{Action, View};
 use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, GunnerFire, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, LAYER};
 use crate::volume::BODY_HEIGHT;
@@ -211,12 +211,12 @@ pub struct AvatarState {
     /// (D3), where movement does nothing. Housekeeping keeps it in the seat.
     #[serde(default)]
     pub seat: Option<Seat>,
-    /// Climbing a face and the stamina wheel (`climb`, save format 47):
+    /// Climbing a face and the stamina wheel (`climb`, save format 53):
     /// off any face with a full wheel for characters that don't climb.
     #[serde(default)]
     pub climbing: super::climb::Climbing,
     /// The highest the feet have been in the fall under way, for a
-    /// climber (save format 48): set while `jump` is `Airborne`, kept on
+    /// climber (save format 54): set while `jump` is `Airborne`, kept on
     /// the tick it lands for housekeeping to hurt it (`fall_housekeeping`,
     /// K7), then cleared.
     #[serde(default)]
@@ -231,14 +231,37 @@ pub enum Seat {
     Vehicle(super::VehicleIx),
     /// Possessing a building, as its slot's `Occupant::Elder`.
     Building(super::BuildingIx),
+    /// Riding a crawler's deck (CR.4 of the crawler, format 48): `place`
+    /// indexes `crawler::RIDERS`. A rider can't steer.
+    Rider { vehicle: super::VehicleIx, place: u8 },
+    /// Manning a crawler's gun (TU.1 of the turret, T2, format 50): its
+    /// place is `crawler::GUNNER`, behind the crates. Like a rider, a
+    /// gunner can't steer.
+    Gunner { vehicle: super::VehicleIx },
 }
 
 impl Seat {
-    /// The vehicle, if it is a vehicle's seat.
+    /// The vehicle, if it is a vehicle's driver's seat.
     pub fn vehicle(self) -> Option<super::VehicleIx> {
         match self {
             Seat::Vehicle(ix) => Some(ix),
+            Seat::Building(_) | Seat::Rider { .. } | Seat::Gunner { .. } => None,
+        }
+    }
+
+    /// The vehicle it is aboard, driving, riding or at the gun.
+    pub fn aboard(self) -> Option<super::VehicleIx> {
+        match self {
+            Seat::Vehicle(ix) | Seat::Rider { vehicle: ix, .. } | Seat::Gunner { vehicle: ix } => Some(ix),
             Seat::Building(_) => None,
+        }
+    }
+
+    /// The rider's place on the deck, if it is a rider's seat.
+    pub fn place(self) -> Option<u8> {
+        match self {
+            Seat::Rider { place, .. } => Some(place),
+            Seat::Vehicle(_) | Seat::Building(_) | Seat::Gunner { .. } => None,
         }
     }
 
@@ -246,7 +269,7 @@ impl Seat {
     pub fn building(self) -> Option<super::BuildingIx> {
         match self {
             Seat::Building(b) => Some(b),
-            Seat::Vehicle(_) => None,
+            Seat::Vehicle(_) | Seat::Rider { .. } | Seat::Gunner { .. } => None,
         }
     }
 }
@@ -651,8 +674,9 @@ impl Settlement {
             self.events.push(Event::BundleRefused { agent, reason });
         }
         self.install(messages.install);
-        self.bursts(messages.burst, tick);
+        self.bursts(messages.burst, tick, terrain);
         self.elder_fire(messages.elder_fire, tick);
+        self.gunner_fire(messages.gunner_fire, tick, terrain);
         for BurstRefused { agent, reason } in messages.burst_refused {
             self.events.push(Event::BurstRefused { agent, reason });
         }
@@ -893,7 +917,13 @@ impl Settlement {
         // A depot transfer's unit, or a bundle's at a pile; a haul's are
         // `read_pile_job`'s.
         if let Some(job) = a.carry.job.as_ref().filter(|j| !self.piles.as_ref().is_some_and(|lab| lab.is_haul(j))) {
-            if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
+            // A crawler's gun's while it stands still, from beside its box
+            // (T6 of the turret).
+            let docked = match job.other {
+                InventoryRef::Gun(v) => interact::beside_gun(&self.vehicles, &self.characters, terrain, v, a.body.position, avatar.height, a.radius()),
+                other => distance(a.body.position, self.position_of(other)) <= DOCK_REACH,
+            };
+            if tick >= job.next_tick && docked {
                 out.player_carry.push(CarryUnit { agent: me });
             }
         }
@@ -948,19 +978,52 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // doesn't stop a dig, keep a released route or end on a cancel.
     let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
     match avatar.seat {
-        Some(Seat::Vehicle(ix)) => {
+        Some(seat @ (Seat::Vehicle(_) | Seat::Rider { .. } | Seat::Gunner { .. })) => {
             // Sitting in a vehicle, a player can look around, climb out,
-            // let go or respawn; movement went to the vehicle (`vehicle::drive`).
+            // let go or respawn; a driver's movement went to the vehicle
+            // (`vehicle::drive`), and a rider's or a gunner's does nothing.
+            // At a crawler's gun (TU.2 of the turret) it is a ballista's
+            // possessing elder: the aim is the reticle, an offset from the
+            // gun's mount cut to its range (moving with the crawler),
+            // `Attack` shoots there and the Burst key throws the gun's
+            // fireball; stage 5 checks the ammo and the reload
+            // (`Settlement::gunner_fire`, `bursts`).
+            let ix = seat.aboard().expect("aboard a vehicle");
+            let gunner = matches!(seat, Seat::Gunner { .. });
+            let range = super::gun::range(view.vehicles, view.characters, ix).filter(|_| gunner);
             match *action {
                 Action::Board => {
                     let v = &view.vehicles[ix as usize];
                     let vehicle_def = &view.characters[v.character as usize];
-                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
+                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, super::crawler::deck_spot(seat), def.body.radius, view.terrain) {
                         avatar.seat = None;
+                        if gunner {
+                            // The reticle back to a facing, as leaving a ballista.
+                            avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
+                        }
                         body.position = position;
                         avatar.height = ground;
                         avatar.flight.support = ground;
                         avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
+                }
+                Action::Aim(offset) if range.is_some() => {
+                    if let Some(reticle) = range.and_then(|range| super::buildings::reticle(offset, range)) {
+                        avatar.aim = Some(reticle);
+                    }
+                    return;
+                }
+                Action::Attack { aim, .. } if range.is_some() => {
+                    if let Some(reticle) = range.and_then(|range| super::buildings::reticle(aim, range)).filter(|_| body.alive()) {
+                        avatar.aim = Some(reticle);
+                        out.gunner_fire.push(GunnerFire { agent: me, vehicle: ix, offset: reticle });
+                    }
+                    return;
+                }
+                Action::Burst if gunner => {
+                    if body.alive() {
+                        out.burst.push(Burst { agent: me });
                     }
                     return;
                 }
@@ -1052,7 +1115,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // Moving lets go of a pile haul, dead or alive.
             drop_haul(avatar, view, out);
             if body.alive() {
-                set_intent(body, avatar, intent.clone(), view.terrain, def);
+                set_intent(body, avatar, intent.clone(), view.terrain, view.vehicles, def);
             }
         }
         // A planned route is a hauler's; no command sends one.
@@ -1126,19 +1189,23 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // the sim has nothing to do for it.
             let at = interact::position(view, target);
             if !body.alive() || matches!(target, interact::InteractTarget::Sprite(_)) {
-            } else if !at.is_some_and(|p| distance(body.position, p) <= interact::INTERACT_REACH) {
+            } else if !interact::reach_distance(view, target, body.position).is_some_and(|d| d <= interact::INTERACT_REACH) {
                 out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::OutOfReach });
             } else {
                 match interact::interaction(view, carry, target) {
                     Ok(Interaction::Bundle(job)) => {
-                        let spot = interact::stand_spot(view, job.other, body.position);
+                        let (other, spot) = (job.other, interact::stand_spot(view, job.other, body.position));
                         start_bundle(carry, job, me, out);
                         // Step in to the dock, as the verbs walk the elder
                         // there; the units move once it is in reach.
-                        if let (Some(at), Some(spot)) = (at, spot) {
-                            if distance(body.position, at) > DOCK_REACH {
-                                set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, def);
-                            }
+                        // A crawler's gun's within the boarding reach of its
+                        // box (`interact::beside_gun`).
+                        let far = match other {
+                            InventoryRef::Gun(v) => !interact::beside_gun(view.vehicles, view.characters, view.terrain, v, body.position, avatar.height, def.body.radius),
+                            _ => at.is_some_and(|at| distance(body.position, at) > DOCK_REACH),
+                        };
+                        if let Some(spot) = spot.filter(|_| far) {
+                            set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, view.vehicles, def);
                         }
                     }
                     Ok(Interaction::Install { building, .. }) => out.install.push(Install { agent: me, building }),
@@ -1147,6 +1214,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                     // A site's needs are the view's to show; leaving is the
                     // seated elder's (above).
                     Ok(Interaction::JobMenu | Interaction::Needs { .. } | Interaction::Leave { .. }) => {}
+                    // A crawler's gun takes nothing while it walks (T6).
+                    Ok(Interaction::Walking { .. }) => out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::Walking }),
                     Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
                 }
             }
@@ -1278,6 +1347,9 @@ pub enum BundleRefusal {
     Carrying,
     /// Boarding a building another elder possesses.
     Possessed,
+    /// A delivery to a crawler's gun while the crawler walks (T6 of the
+    /// turret): it takes stone only standing still.
+    Walking,
 }
 
 impl BundleRefusal {
@@ -1302,6 +1374,7 @@ impl BundleRefusal {
             BundleRefusal::NoRoom => "No room to drop it here",
             BundleRefusal::Carrying => "Drop the bundle first (Q)",
             BundleRefusal::Possessed => "Another elder is in there",
+            BundleRefusal::Walking => "The crawler is walking: wait for it to stop",
         }
     }
 }
@@ -1327,6 +1400,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
         InventoryRef::Site(b) => view.buildings.get(b as usize).and_then(|b| b.site()).map(|(_, materials)| materials),
         // A dispenser's output is the pile lab's alone.
         InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).filter(|p| p.source.is_none()).map(|p| &p.inventory),
+        // A crawler's gun's ammo store (T6 of the turret).
+        InventoryRef::Gun(v) => view.vehicles.get(v as usize).and_then(|v| v.gun.as_ref()).map(|g| &g.store),
         InventoryRef::Agent(_) | InventoryRef::Collector => None,
     };
     let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
@@ -1335,8 +1410,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
     let depot_item = |item: &ItemIx| (*item as usize) < view.items;
     let (item, units) = match direction {
         // A site is a drop-off: nothing is taken back out (D4), nor out of
-        // a ballista's ammo store (B2).
-        Direction::Pickup if matches!(other, InventoryRef::Site(_)) => return Err(BundleRefusal::DepositOnly),
+        // a ballista's ammo store (B2) or a crawler's gun's (T6).
+        Direction::Pickup if matches!(other, InventoryRef::Site(_) | InventoryRef::Gun(_)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup if matches!(other, InventoryRef::Output(b) if super::interact::ammo_store(view, b)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup => {
             // The holder's item: a tree pile's own, what an output holds, or
@@ -1381,6 +1456,10 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
             if holder.free() == 0 {
                 return Err(BundleRefusal::PileFull);
             }
+            // A crawler's gun takes it only while the crawler stands still.
+            if matches!(other, InventoryRef::Gun(v) if super::crawler::walking(&view.vehicles[v as usize])) {
+                return Err(BundleRefusal::Walking);
+            }
             (item, cargo.available(item).min(holder.free()))
         }
     };
@@ -1388,8 +1467,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
 }
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its
-/// route.
-fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain: &Terrain, def: &CharacterDef) {
+/// route, round the crawlers' feet among `vehicles` (CR.5).
+fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain: &Terrain, vehicles: &[super::VehicleState], def: &CharacterDef) {
     // Walking off stops a dig.
     let walking = match intent {
         Intent::Stop => false,
@@ -1412,11 +1491,16 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
         // so it comes down on the target's floor, not on the mountain over
         // a tunnel; with no path on foot, straight there as elsewhere.
         let floor = if flying { terrain.footprint_at(body.position, avatar.height, radius).unwrap_or(avatar.flight.support) } else { avatar.height };
-        let path = || nav::path_at(terrain, body.position, floor, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        // On foot it goes round the crawlers' planted feet (CR.5); flying
+        // over them, it needn't. A foot on the target itself doesn't keep
+        // it from walking there: it waits beside it, or the foot lifts.
+        let mut feet = if flying { Vec::new() } else { super::crawler::feet_in_the_way(&super::crawler::footings(vehicles), terrain, body.position, floor, radius) };
+        feet.retain(|d| distance(d.center, target) >= d.radius + radius);
+        let path = || nav::path_at(terrain, body.position, floor, target, None, radius, &feet).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
         body.route = match terrain.volume {
             Some(_) if !flying => path(),
             Some(_) => Some(path()).filter(|route| !route.is_empty()).unwrap_or_else(|| nav::path_with(terrain, body.position, target, radius, &[], &walkable)),
-            None => nav::path_with(terrain, body.position, target, radius, &[], &walkable),
+            None => nav::path_with(terrain, body.position, target, radius, &feet, &walkable),
         };
         avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {

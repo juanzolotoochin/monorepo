@@ -276,6 +276,16 @@ impl SessionService {
         self.session.queue(kind);
     }
 
+    /// Sends a command as another player (a demo script's guest): a host
+    /// applies it on its next tick, a replay ignores it; a client refuses.
+    pub fn command_as(&mut self, player: sim::PlayerId, kind: CommandKind) -> Result<(), String> {
+        if self.session.queue_as(player, kind) {
+            Ok(())
+        } else {
+            Err("Guests need a host".into())
+        }
+    }
+
     /// Puts a weapon in the avatar's hand, for every peer to see; the local
     /// view switches right away.
     pub fn equip(&mut self, weapon: content::scenario::Weapon) {
@@ -1324,9 +1334,10 @@ pub fn attack_input(
     if !attack_click(keys, buttons, pointer_free, piles.as_ref().is_some_and(|lab| lab.stock.is_some())) {
         return;
     }
-    // A seated elder doesn't swing: in a ballista the click fires it
-    // (`input::town::fire`), elsewhere in a building it does nothing.
-    if service.player().zip(service.settlement()).is_some_and(|(agent, s)| s.seat(agent as usize).is_some_and(|seat| seat.building().is_some())) {
+    // A seated elder doesn't swing: in a ballista or at a crawler's gun the
+    // click fires it (`input::town::fire`), elsewhere (a building, a
+    // vehicle's cab or deck) it does nothing.
+    if service.player().zip(service.settlement()).is_some_and(|(agent, s)| s.seat(agent as usize).is_some()) {
         return;
     }
     if settlement.as_ref().and_then(|s| s.simulation.as_ref()).is_some_and(|sim| {

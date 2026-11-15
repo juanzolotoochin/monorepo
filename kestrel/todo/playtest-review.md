@@ -5,14 +5,9 @@ and reviewed only by video and screenshots. All were accepted "for now";
 each needs a look in a real play session before it is settled. Work on a
 decision only after that review: until then the current behaviour stands.
 
-The work is on four stacked branches, none merged:
-
-1. `kestrel-verticality`: tunnels MVP and the Tunnel Lab (PR #135, open).
-2. `kestrel-verticality-sight`: seeing inside by line of sight (not pushed).
-3. `kestrel-sacred-tree-depths`: M8, the town on a volume with lanterns
-   (not pushed, last commit 823d4a4).
-4. `kestrel-sacred-tree-fog`: M9, fog of war in the town (a prototype, not
-   pushed).
+The work was on four stacked branches, all merged on master since
+(#135–#138, see Done). The crawler prototype ([`CRAWLER.md`](../CRAWLER.md))
+is on branch `kestrel-crawler`, its PR to come.
 
 Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 [`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md),
@@ -20,16 +15,6 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 `//kestrel/app:tunnel_lab_demo_video`,
 `//kestrel/app:sacred_tree_depths_demo_video`,
 `//kestrel/app:sacred_tree_fog_demo_video`.
-
-## Merge and push the stack
-
-- **Status:** open
-- **Why:** the four branches wait on the user; nothing past #135 is pushed.
-- **What to do:** after the playtest, merge #135, then push the sight,
-  depths and fog branches and open their PRs (stacked, with `merge -s ours`
-  rather than a force-push).
-- **Where:** the branches above.
-- **Found in:** M8.8 report.
 
 ## Play the tunnels and digging
 
@@ -147,6 +132,79 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 - **Where:** `sim/src/mine.rs` (`AMBER_YIELD`), `sim/src/settlement/piles.rs`.
 - **Found in:** M8.8.
 
+## Play the crawler
+
+- **Status:** open
+- **Why:** the crawler ([`CRAWLER.md`](../CRAWLER.md)) is a prototype
+  tuned by tests, a soak and one video (CR.6); nobody has driven it.
+- **What to do:** in the Crawler Lab (F4 steps to it), board with G and
+  judge:
+  - **Speed and weight.** It walks at 1.6 m/s on a wave of one leg at a
+    time and trots at 3.2 m/s on boost; it takes about 2 s to get going
+    (the last leg of the wave steps 1.8 s in) and turns at 20°/s. Too
+    slow, too heavy, or right for something four elders big?
+  - **Steering.** The stick walks within 60° of the heading, turns in
+    place up to 120° and backs up past that. Is turning in place as a
+    separate gait clear, or does it feel unresponsive?
+  - **Pits and cliffs.** It stops at the 3 m pit and the 2 m cliff with no
+    message; turned in place at the pit's edge it backs off slowly as it
+    turns (CR.6). Does a stop read as "too wide", or as stuck?
+  - **The legs.** Knees high and a little outward, feet upright, swing
+    arcs of 0.9 m walking and 0.6 m trotting. Do they read at the play
+    camera, and does the 1.4 pull-back while aboard help or lose the
+    elder?
+  - **Riders.** Three riders on the cargo deck, the pilot at the helm,
+    all standing in the idle pose; G boards the cab first, then the free
+    place nearest. Climbing down lands beside the box, never into a
+    trench.
+  - **Stomps and shoves.** A foot coming down kills a ghoul under it
+    (4 damage) and shoves an elder or sprite 0.1 m clear; feet never land
+    on someone already standing there. Walking into a foot with the stick
+    passes through it. Is a stomp satisfying, too easy, or too rare?
+- **Where:** `sim/src/settlement/crawler.rs`,
+  `content/data/character/crawler.ron`, `app/src/crawler.rs`,
+  `app/actors/crawler.ron`, `app/src/vehicles.rs`.
+- **Found in:** CR.1–CR.6.
+
+## Play the crawler's turret
+
+- **Status:** open
+- **Why:** the crawler's gun ([`CRAWLER_TURRET.md`](../CRAWLER_TURRET.md))
+  is a prototype tuned by tests, a soak and two videos (TU.6); nobody has
+  manned it in play.
+- **What to do:** in the Crawler Lab (F4 steps to it), with a second
+  player or a sprite, judge:
+  - **Two players, one crawler.** One pilots (G takes the cab first), the
+    other takes the gun (G again: the cab, then the gun, then the deck).
+    Does driving to the ghouls while the other shoots feel like teamwork,
+    or does the gunner just wait for the pilot to stop?
+  - **Aiming from a moving mount.** The reticle is an offset from the gun
+    and rides with the crawler, cut to 7 m; bolts every 0.7 s, the
+    fireball (R, RB) every 25 s. Ghouls walking across the line of fire
+    are easy to miss at 8 m/s: is leading them fun, or fiddly?
+  - **Range and height.** The gun's bow is about 4.8 m up and reaches 7 m
+    on the ground, on any floor below it. Is 7 m enough from up there, and
+    does the camera pull-back (1.4) show the whole ring?
+  - **The gun in the view.** A dark iron-and-timber ballista on the brass
+    cab's roof, about 1.4 m across the bow, turning to the aim. Does it
+    read at the lab's camera, and is it clear who is shooting?
+  - **Sprite gunners.** E on a sprite (or J) gives it the crew job; it
+    walks over and climbs up only while the crawler stands still, then
+    shoots the nearest ghoul in range by itself. It aims where the ghoul
+    is, not where it will be, so it misses ghouls walking across its line
+    (see "A sprite gunner doesn't lead a crossing ghoul" in
+    `todo/vehicles.md`). Is waiting for it to board annoying?
+  - **Bumping and restocking.** An elder boarding takes the gun from a
+    sprite (it moves to a free rider's place or climbs down). Stone (20)
+    is loaded by hand: E at the pile, E beside the stopped crawler; a
+    walking crawler takes none. Is stopping to restock a good beat or a
+    chore?
+- **Where:** `sim/src/settlement/gun.rs`, `crew.rs`, `interact.rs`,
+  `content/data/character/crawler.ron`, `app/actors/crawler.ron`,
+  `app/src/input/town.rs`, demos `crawler_gunner.json` and
+  `crawler_sprite_gunner.json`.
+- **Found in:** TU.1–TU.6.
+
 ## Look at the town's ground
 
 - **Status:** open
@@ -219,3 +277,15 @@ Smaller open work from these milestones, not decisions to review:
 sight follow-ups", "Collapse and support", "Pile reach in 3D", "The
 jetpack into a 2 m tunnel" and "Lighting underground" in
 [`verticality.md`](verticality.md).
+
+## Done
+
+## Merge and push the stack
+
+- **Status:** done (#135, #136, #137 and #138, merged on master)
+- **Why:** the four branches wait on the user; nothing past #135 is pushed.
+- **What to do:** after the playtest, merge #135, then push the sight,
+  depths and fog branches and open their PRs (stacked, with `merge -s ours`
+  rather than a force-push).
+- **Where:** the branches above.
+- **Found in:** M8.8 report.

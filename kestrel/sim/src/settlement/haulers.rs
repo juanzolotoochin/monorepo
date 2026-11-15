@@ -287,6 +287,10 @@ pub(super) struct Ctx<'a> {
     /// The player's avatar as it stood last tick, where and its feet's
     /// height: what the test walker follows (`follow`).
     pub leader: Option<(FxVec2, Fx)>,
+    /// Who mans each vehicle's gun, an elder or a sprite, as of last tick
+    /// (`Settlement::gun_crew`): what a crew sprite's brain reads to tell a
+    /// free gun (TU.4 of the crawler turret).
+    pub crews: &'a [Option<AgentIx>],
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {
@@ -299,7 +303,7 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
         },
         // Players walk on their own; haulers and sprites follow routes.
         next: a.avatar().is_none().then(|| a.body.route.first().copied()).flatten(),
-        solid: a.sprite().is_none_or(|sprite| !sprite.inside() && a.body.alive()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
+        solid: a.sprite().is_none_or(|sprite| !sprite.sheltered() && a.body.alive()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
         height: a.height(),
     }
 }
@@ -639,6 +643,12 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
                 nearby.push(t);
             }
         }
+    }
+    // A crawler's feet are in the way as bodies are (CR.5): a walker meeting
+    // one detours round it. Its body is overhead.
+    if !ctx.view.vehicles.is_empty() {
+        let footings = super::crawler::footings(ctx.view.vehicles);
+        nearby.extend(super::crawler::feet_in_the_way(&footings, ctx.terrain, body.position, feet, radius).into_iter().filter(|d| distance(body.position, d.center) < near));
     }
     let dynamic = nearby.len();
     let gap = Fx::from_ratio(2, 25); // 0.08

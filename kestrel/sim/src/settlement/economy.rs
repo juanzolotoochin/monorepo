@@ -17,6 +17,7 @@ impl Settlement {
     pub(crate) fn self_update(&mut self, tick: u64, terrain: &Terrain) {
         self.events.clear();
         self.threats_self_update(tick, terrain);
+        let standing = self.standing_for_crawlers();
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
         let items = self.depot_items();
         // Miners' dig claims as of last tick, and where their stone goes.
@@ -31,6 +32,7 @@ impl Settlement {
             .filter_map(|(i, a)| super::miners::errand(i as AgentIx, a.sprite()?, &a.carry, &self.depots))
             .collect();
         let danger = self.danger();
+        let crews: Vec<Option<AgentIx>> = (0..self.vehicles.len() as super::VehicleIx).map(|v| self.gun_crew(v)).collect();
         let leader = self.player().and_then(|p| {
             let a = &self.agents[p as usize];
             Some((a.body.position, a.avatar()?.height))
@@ -54,9 +56,9 @@ impl Settlement {
             building_kinds,
             light,
         };
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, errands: &errands, stone, amber, danger: &danger, leader };
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, errands: &errands, stone, amber, danger: &danger, leader, crews: &crews };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
-        self.vehicles_self_update(terrain);
+        self.vehicles_self_update(terrain, &standing);
         self.release_distant_piano_notes();
     }
 
@@ -70,11 +72,12 @@ impl Settlement {
             .map(|(i, a)| {
                 let mut out = Messages::default();
                 haulers::read(a, i as AgentIx, tick, self, terrain, &mut out);
-                super::sprites::read(a, i as AgentIx, tick, self, &mut out);
+                super::sprites::read(a, i as AgentIx, tick, self, terrain, &mut out);
                 (a.body.position, out)
             })
             .collect();
         result.extend(self.read_combat(tick, terrain));
+        result.extend(self.read_footfalls(terrain));
         result
     }
 
@@ -117,7 +120,7 @@ impl Settlement {
             InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
             // Nothing sends units to an output yet; this keeps `land` whole.
             // A delivery lands in a site's materials.
-            InventoryRef::Output(_) | InventoryRef::Site(_) => self.inventory_mut(t.to).put(t.item, 1),
+            InventoryRef::Output(_) | InventoryRef::Site(_) | InventoryRef::Gun(_) => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 

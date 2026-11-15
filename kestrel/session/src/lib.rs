@@ -159,6 +159,20 @@ impl Session {
         }
     }
 
+    /// Queues a command from another player, as if they had sent it: a demo
+    /// script's guests. A host does; a replay ignores it, as it ignores the
+    /// local player's (the log has them); a client can't, and returns false.
+    pub fn queue_as(&mut self, player: PlayerId, kind: CommandKind) -> bool {
+        match &mut self.peer {
+            Peer::Host(host) => {
+                host.queue_as(player, kind);
+                true
+            }
+            Peer::Replay { .. } => true,
+            Peer::Client(_) => false,
+        }
+    }
+
     /// Runs the network and every tick due by `now`, calling `on_step` after
     /// each tick. Returns how many ticks ran.
     pub fn update(&mut self, now: Duration, mut on_step: impl FnMut(&World)) -> u64 {

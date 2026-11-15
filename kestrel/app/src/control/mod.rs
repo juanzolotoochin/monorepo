@@ -284,15 +284,33 @@ fn send(world: &mut World, kind: CommandKind) {
     world.resource_mut::<SessionService>().command(kind);
 }
 /// The sprite job a command names: a building kind (by id) to staff,
-/// `"mine"` to mine (`legacy::MINE_JOB`), or idle when missing.
+/// `"mine"` to mine (`legacy::MINE_JOB`), `"crew"` to crew a crawler's gun
+/// (`legacy::CREW_JOB`, TU.4 of the crawler turret), or idle when missing.
 fn sprite_job(s: &sim::settlement::Settlement, job: Option<&str>) -> Result<sim::settlement::SpriteJob, String> {
     Ok(match job {
         None => sim::settlement::SpriteJob::Idle,
         Some(crate::legacy::MINE_JOB) => sim::settlement::SpriteJob::Mine,
+        Some(crate::legacy::CREW_JOB) => sim::settlement::SpriteJob::Crew,
         Some(kind) => sim::settlement::SpriteJob::Staff(s.building_kinds.iter().position(|k| k.id == kind).ok_or("unknown building kind")? as u16),
     })
 }
 /// The local player's avatar index.
+/// A scripted guest's player: 1 to 8 (the host is 0).
+fn guest_player(guest: u32) -> Result<sim::PlayerId, String> {
+    if !(1..=8).contains(&guest) {
+        return Err("A guest is player 1 to 8".into());
+    }
+    Ok(sim::PlayerId(guest))
+}
+/// A scripted stick (`drive`, `guest_drive`): finite, at most 1 long, in
+/// the sim's fixed point.
+fn stick(direction: [f32; 2]) -> Result<fx::FxVec2, String> {
+    if direction.iter().any(|v| !v.is_finite()) || direction[0].hypot(direction[1]) > 1.001 {
+        return Err("Drive needs a finite direction of length at most 1".into());
+    }
+    Ok(fx::FxVec2::new(fx::Fx::quantize(direction[0]), fx::Fx::quantize(direction[1])))
+}
+
 fn player(world: &World) -> Option<u16> {
     world.get_resource::<SessionService>()?.player()
 }
@@ -596,13 +614,39 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             send(world, CommandKind::Jump { agent });
             Ok(Pending::Applied)
         }
+        Command::GuestJoin { guest } => {
+            let player = guest_player(*guest)?;
+            world.resource_mut::<SessionService>().command_as(player, CommandKind::Join)?;
+            Ok(Pending::Applied)
+        }
+        Command::GuestWalk { guest, position } => {
+            let player = guest_player(*guest)?;
+            let goal = point(*position)?;
+            let mut service = world.resource_mut::<SessionService>();
+            let agent = service.settlement().and_then(|s| s.avatar_of(player)).ok_or("That guest hasn't joined")?;
+            let target = service.to_sim(goal);
+            service.command_as(player, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::GoTo { target, run: false } })?;
+            Ok(Pending::Applied)
+        }
+        Command::GuestBoard { guest } => {
+            let player = guest_player(*guest)?;
+            let mut service = world.resource_mut::<SessionService>();
+            let agent = service.settlement().and_then(|s| s.avatar_of(player)).ok_or("That guest hasn't joined")?;
+            service.command_as(player, CommandKind::Board { agent })?;
+            Ok(Pending::Applied)
+        }
         Command::Drive { direction, run } => {
-            if direction.iter().any(|v| !v.is_finite()) || direction[0].hypot(direction[1]) > 1.001 {
-                return Err("Drive needs a finite direction of length at most 1".into());
-            }
+            let direction = stick(*direction)?;
             let agent = player(world).ok_or("No player")?;
-            let direction = fx::FxVec2::new(fx::Fx::quantize(direction[0]), fx::Fx::quantize(direction[1]));
             send(world, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::Walk { direction, run: *run } });
+            Ok(Pending::Applied)
+        }
+        Command::GuestDrive { guest, direction, run } => {
+            let player = guest_player(*guest)?;
+            let direction = stick(*direction)?;
+            let mut service = world.resource_mut::<SessionService>();
+            let agent = service.settlement().and_then(|s| s.avatar_of(player)).ok_or("That guest hasn't joined")?;
+            service.command_as(player, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::Walk { direction, run: *run } })?;
             Ok(Pending::Applied)
         }
         Command::Dig => {

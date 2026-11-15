@@ -129,6 +129,9 @@ pub(super) struct Town<'a> {
     /// The lantern sites' errands miners are on, as of last tick
     /// (`Errand`), so two don't fetch for the same need.
     pub errands: &'a [Errand],
+    /// Who mans each vehicle's gun, elder or sprite, as of last tick
+    /// (`haulers::Ctx::crews`, TU.4 of the crawler turret).
+    pub crews: &'a [Option<AgentIx>],
 }
 
 /// A miner's errand for a lantern's site (M8.6): the site, and the item it
